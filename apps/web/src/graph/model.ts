@@ -25,6 +25,8 @@ export interface GNode {
   link?: { clusterId: string; status: string; score: number; band: string; rule: string; reason: string };
   /** A signed message proves control of the address. */
   proven?: boolean;
+  /** Not present in the previous analysis of this case. */
+  fresh?: boolean;
   /** Nothing on the web ties this account to the person; it was found through the person's wallet. */
   viaWallet?: boolean;
   /** The profile showed a different address in the past. */
@@ -162,6 +164,17 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
       }
       case 'hit':
         if (e.relation !== 'mention') leadEdge(e.via, docAccount.get(e.documentId), e.seq);
+        break;
+      case 'diff':
+        for (const a of e.added) {
+          const n = nodes.get(addressId(a.chain, a.address));
+          if (n) n.fresh = true;
+        }
+        for (const a of e.accounts) {
+          const n = nodes.get(accountId(a.origin, a.handle));
+          if (n) n.fresh = true;
+        }
+        touched = [...e.added.map((a) => addressId(a.chain, a.address)), ...e.rescored.map((a) => addressId(a.chain, a.address))];
         break;
       case 'trail': {
         const root = addressId(e.chain, e.root);

@@ -2,7 +2,7 @@
 
 Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, imię i nazwisko, e-mail, telefon, adres krypto) samo przeszukuje publiczne źródła, znajduje powiązane adresy kryptowalutowe i zapisuje każdy ślad razem ze źródłem.
 
-> Stan: **etap 5 z 7 oraz pogłębione wyszukiwanie i źródła rzeczywiste**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków, dopasowuje kwoty do przelewów, czyta nazwy adresów (ENS) i rozpoznaje tego samego klienta giełdy. Obok środowiska testowego ma konektory do źródeł rzeczywistych: GitHub, eksplorator Bitcoin, węzeł Ethereum z ENS, NBP, Wayback Machine.
+> Stan: **etap 5 z 7, pogłębione wyszukiwanie, źródła rzeczywiste oraz analizy cykliczne z porównaniem wyników**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków, dopasowuje kwoty do przelewów, czyta nazwy adresów (ENS) i rozpoznaje tego samego klienta giełdy. Sprawę można analizować ponownie na żądanie albo według harmonogramu; każda kolejna analiza mówi, co się zmieniło od poprzedniej. Obok środowiska testowego są konektory do źródeł rzeczywistych: GitHub, eksplorator Bitcoin, węzeł Ethereum z ENS, NBP, Wayback Machine.
 
 ![Graf powiązań z szacunkiem w złotych](docs/screenshots/graf-wynik.png)
 
@@ -13,6 +13,10 @@ Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, i
 | Podmiana adresu na profilu w czasie | Szacunek i jego wyliczenie |
 |---|---|
 | ![Profil w czasie](docs/screenshots/profil-w-czasie.png) | ![Szacunek w złotych](docs/screenshots/szacunek.png) |
+
+| Co się zmieniło od poprzedniej analizy |
+|---|
+| ![Zmiany między analizami](docs/screenshots/zmiany-miedzy-analizami.png) |
 
 Przykładowy raport: [`docs/przykladowy-raport.pdf`](docs/przykladowy-raport.pdf).
 
@@ -30,7 +34,7 @@ Wymagany Node.js 20.19 lub nowszy.
 
 ```bash
 npm install
-npm test                          # 104 testy, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
+npm test                          # 108 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
 npm run world                     # terminal 1: środowisko syntetyczne (porty 4101–4106)
 npm run analyze -- szklane_domy   # terminal 2: analiza od jednego nicku, wynik w konsoli
 npm run api                       # terminal 2: API HTTP na porcie 4000
@@ -50,6 +54,7 @@ Jeden ekran, jedna historia. Po wpisaniu identyfikatora graf rośnie krok po kro
 - **Paragon.** Kliknięcie adresu pokazuje Wskaźnik Pewności jak paragon: każda reguła to pozycja z punktami i źródłami, na dole suma.
 - **Odrzucenia.** Adres giełdy, kontraktu lub cudzy adres z cytatu zostaje w grafie przekreślony, z powodem.
 - **Trzy rodzaje stwierdzeń.** Każdy blok jest oznaczony jako fakt źródłowy, wynik obliczeń albo wniosek do weryfikacji.
+- **Analizy tej sprawy.** W panelu wyniku ustawia się powtarzanie analizy, uruchamia ją ponownie i otwiera wcześniejsze wyniki. Analiza, która wykryła zmiany, otwiera się sama i pokazuje ich listę; nowe adresy i konta są w grafie oznaczone słowem „nowy”.
 - **Raport.** Druga zakładka pokazuje gotowy raport z przyciskiem pobrania PDF.
 - Czcionki są dołączone do aplikacji; interfejs nie pobiera niczego z zewnętrznych serwerów.
 
@@ -137,9 +142,41 @@ Pasma: 80–100% bardzo wysokie, 60–79% prawdopodobne, 40–59% średnie, 1–
 
 Kursy NBP pobierane są z publicznego API banku (`NBP_API_URL=https://api.nbp.pl`); domyślnie używana jest dołączona kopia rzeczywistych tabel, żeby narzędzie działało bez Internetu.
 
+### Analizy cykliczne i porównanie wyników
+
+Sprawę wyznaczają wprowadzone identyfikatory i zestaw źródeł. Ponowna analiza tych samych danych nie tworzy nowej sprawy, tylko dopisuje do niej kolejną analizę. Każda analiza zostaje w bazie w całości: pobrane strony, wykryte adresy, wynik i reguły, według których go policzono.
+
+**Harmonogram.** Dla sprawy ustawia się odstęp między analizami (w interfejsie: co 30 sekund na potrzeby pokazu, co 5 minut, co godzinę, co dobę; przez API dowolny od 15 sekund do 7 dni). Harmonogram jest zapisany w bazie i wykonywany przez samą aplikację — bez zewnętrznej usługi zadań, więc działa tak samo w środowisku bez dostępu do chmury. Ta sama sprawa nigdy nie jest analizowana dwa razy jednocześnie, a termin pominięty podczas przestoju jest nadrabiany raz.
+
+**Porównanie.** Każda kolejna analiza kończy się porównaniem z poprzednią. Porównać można też dowolne dwie analizy tej samej sprawy. Wynik porównania wymienia:
+
+| Co | Przykład |
+|---|---|
+| nowe adresy, także odrzucone | „Nowy adres bc1qw508d6…v8f3t4 (Bitcoin): 85%, bardzo wysokie — własny profil.” |
+| adresy, których nie ma już w źródłach | zapis poprzedniej analizy pozostaje w magazynie dowodów |
+| zmianę wyniku z przyczyną | która reguła doszła albo odpadła |
+| zmiany na profilach | „Na profilu szklane_domy adres … został zastąpiony adresem …” |
+| nowe lub odłączone konta osoby | |
+| nowe wzorce wyjścia do walut tradycyjnych i nowe przelewy | |
+| zmianę szacunku w złotych, osobno dla każdego roku | |
+| liczbę stron zmienionych, nowych i niepobranych | porównanie skrótów treści |
+
+Porównanie jest funkcją dwóch zapisanych wyników (`packages/engine/src/diff.ts`), więc nie wymaga ponownego pobierania czegokolwiek.
+
+| Wywołanie | Działanie |
+|---|---|
+| `POST /api/cases/<id>/runs` | analizuje sprawę ponownie teraz |
+| `PUT /api/cases/<id>/schedule` z `{"everySeconds": 3600}` | ustawia harmonogram; `null` go wyłącza |
+| `GET /api/cases/<id>` | harmonogram i lista analiz z notatką o zmianach |
+| `GET /api/runs/<id>/diff` | zmiany względem poprzedniej analizy; `?against=<id>` porównuje z dowolną inną |
+
+W konsoli wystarczy powtórzyć `npm run analyze -- szklane_domy`: druga analiza wypisze listę zmian.
+
+**Jak to sprawdzić w środowisku testowym.** Forum BitRozmowy (`http://localhost:4101`) przyjmuje zmiany: pod każdym wątkiem jest formularz odpowiedzi, a na profilu użytkownika — zmiana sygnatury. Wystarczy wykonać analizę, wpisać na forum nowy adres pod nickiem `szklane_domy` i analizować ponownie. Ponowne uruchomienie `npm run world` przywraca stan początkowy.
+
 ### Raport
 
-`GET /api/runs/<id>/report` zwraca raport jako jeden samodzielny dokument HTML, a `/report.pdf` — jako PDF. Raport zawiera: podsumowanie, konta osoby, adresy z uzasadnieniem i źródłami, odrzucone przypisania, aktywność w łańcuchu bloków, szacunek z każdą użytą tabelą NBP, chronologiczny przebieg przepływu środków, projekt zapytania do giełdy, pełny wykaz zapisanych dowodów ze skrótami SHA-256 i słowniczek. Każda część jest oznaczona jako fakt źródłowy, wynik obliczeń albo wniosek do weryfikacji.
+`GET /api/runs/<id>/report` zwraca raport jako jeden samodzielny dokument HTML, a `/report.pdf` — jako PDF. Raport zawiera: podsumowanie, zmiany od poprzedniej analizy (jeśli była), konta osoby, adresy z uzasadnieniem i źródłami, odrzucone przypisania, aktywność w łańcuchu bloków, szacunek z każdą użytą tabelą NBP, chronologiczny przebieg przepływu środków, projekt zapytania do giełdy, pełny wykaz zapisanych dowodów ze skrótami SHA-256 i słowniczek. Każda część jest oznaczona jako fakt źródłowy, wynik obliczeń albo wniosek do weryfikacji.
 
 ### Wskaźniki wyjścia do walut tradycyjnych
 

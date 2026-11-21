@@ -110,6 +110,7 @@ function NodeMark({ n, b }: { n: GNode; b: Box }) {
         {n.clusterId && !nameOnly && <rect className="n-bar" width="4" height={b.h} rx="2" />}
         <text className="t-title" x="16" y="21">{cut(n.title, 22)}</text>
         <text className="t-sub" x="16" y="38">{n.changed ? `${n.sub}, podmienił adres` : n.viaWallet ? `${n.sub}, przez łańcuch` : n.sub}</text>
+        {n.fresh && <text className="t-fresh" x={b.w - 10} y="20" textAnchor="end">nowe</text>}
       </>
     );
   }
@@ -168,7 +169,8 @@ function NodeMark({ n, b }: { n: GNode; b: Box }) {
         </>
       )}
       {rejected && <Cross x={b.w - 20} y={17} />}
-      <text className="t-sub" x="12" y="45">{cut(sub, 42)}</text>
+      <text className="t-sub" x="12" y="45">{cut(sub, n.fresh ? 34 : 42)}</text>
+      {n.fresh && <text className="t-fresh" x={b.w - 12} y="45" textAnchor="end">nowy</text>}
     </>
   );
 }

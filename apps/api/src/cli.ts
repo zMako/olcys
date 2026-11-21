@@ -1,5 +1,5 @@
 import { guessIdentifier, makeIdentifier, type Identifier, type IdentifierKind } from '@olcys/core';
-import { runAnalysis, type RunSummary } from '@olcys/engine';
+import { diffRuns, runAnalysis, type RunSummary } from '@olcys/engine';
 import { loadRuntime } from './config';
 
 const KINDS: Record<string, IdentifierKind> = {
@@ -66,14 +66,21 @@ if (!identifiers.length) {
 const rt = await loadRuntime();
 try {
   const title = typeof flags.title === 'string' ? flags.title : identifiers.map((i) => i.value).join(', ');
-  const c = await rt.store.createCase(title, identifiers);
+  // Running the same identifiers again adds a run to the same case, so the two can be compared.
+  const mode = flags.live ? 'live' : rt.defaultMode;
+  const c = await rt.store.findOrCreateCase(title, identifiers, mode);
   const summary = await runAnalysis(
-    { store: rt.store, ...rt.sets[flags.live ? 'live' : rt.defaultMode], log: flags.verbose ? (m) => console.error(m) : undefined },
+    { store: rt.store, ...rt.sets[mode], log: flags.verbose ? (m) => console.error(m) : undefined },
     c.id,
     typeof flags.depth === 'string' ? { maxDepth: Number(flags.depth) } : {},
   );
   if (flags.json) console.log(JSON.stringify(summary, null, 2));
   else print(summary);
+  const diff = await diffRuns(rt.store, summary.runId);
+  if (diff && !flags.json) {
+    console.log(`\n${diff.summary}`);
+    for (const line of [...diff.links, ...diff.profiles, ...diff.accounts, ...diff.indicators]) console.log(`  · ${line.text}`);
+  }
   const evidence = await rt.store.verifyEvidence(summary.runId);
   if (!flags.json) console.log(`\nEvidence chain: ${evidence.ok ? 'intact' : 'BROKEN at ' + evidence.broken.join(', ')} (${evidence.checked} snapshots verified).`);
   process.exitCode = summary.status === 'completed' ? 0 : 2;

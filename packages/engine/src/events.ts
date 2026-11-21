@@ -38,6 +38,11 @@ export type RunEvent =
       totals: { asset: string; amount: number }[]; counterparties: { address: string; name?: string; category?: string }[];
     }
   | { type: 'estimate'; totalPln: number; years: { year: number; probablePln: number; possiblePln: number; totalPln: number }[] }
+  /** What changed since the previous analysis of the same case. */
+  | {
+      type: 'diff'; baseRunId: string; changed: boolean; summary: string;
+      added: { chain: string; address: string }[]; rescored: { chain: string; address: string }[]; accounts: { origin: string; handle: string }[];
+    }
   | { type: 'run.finished'; status: string; error?: string; counts: { documents: number; mentions: number; snapshots: number; denied: number } };
 
 export type StoredRunEvent = RunEvent & { seq: number; at: string };

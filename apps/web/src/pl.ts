@@ -108,6 +108,8 @@ export function describe(e: StoredRunEvent): string {
       return `Eksplorator: ${e.transfers} przelewów adresu ${shortAddress(e.address)}.`;
     case 'indicator':
       return `${e.title}: ${e.summary}`;
+    case 'diff':
+      return e.summary;
     case 'run.finished':
       return e.status === 'completed' ? 'Analiza zakończona.' : `Analiza przerwana: ${e.error ?? 'błąd'}.`;
   }

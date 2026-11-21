@@ -85,6 +85,7 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .graph .t-address.struck { text-decoration: line-through; fill: var(--ink-3); }
 .t-score { font-size: 17px; font-weight: 700; }
 .meter-track { fill: #e2e7e8; }
+.graph .t-fresh { font-size: 12.5px; font-weight: 700; font-style: italic; fill: var(--stamp); }
 
 .edge { transition: opacity 0.15s; }
 .edge.dim { opacity: 0.12; }
@@ -199,6 +200,17 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
   transform: rotate(-5deg); opacity: 0.9; animation: stamp 0.25s ease-in both; animation-delay: calc(var(--i) * 130ms + 420ms); }
 @keyframes print { from { opacity: 0; transform: translateY(-5px); } }
 @keyframes stamp { from { opacity: 0; transform: rotate(-5deg) scale(1.7); } }
+
+/* ---------- repeated analyses */
+.changes { padding: 8px 12px; border-left: 3px solid var(--stamp); background: #efedfb; }
+.changes-list li { padding: 6px 0 6px 12px; border-left: 3px solid var(--stamp); margin: 6px 0; font-size: 14.5px; }
+.case-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0 10px; font-size: 14.5px; }
+.case-controls select, .case-controls button { padding: 5px 10px; background: #fff; border: 1px solid var(--line-strong); border-radius: 3px; font: inherit; font-size: 14.5px; cursor: pointer; }
+.runs li { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.runs button { padding: 0; background: none; border: 0; color: var(--stamp); text-decoration: underline; cursor: pointer; font: inherit; }
+.runs .current { font-weight: 700; }
+.runs .quiet, .runs .run-changed { font-weight: 400; font-size: 13.5px; }
+.runs .run-changed { color: var(--stamp); }
 
 /* ---------- challenges, image evidence, profile history */
 .challenges li { display: grid; grid-template-columns: 76px 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14.5px; }

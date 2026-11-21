@@ -1,10 +1,17 @@
-import { GENESIS_HASH, chainHash, sha256Hex, type AccountInfo, type AddressMention, type Identifier, type Segment, type SourceItem, type Transfer } from '@olcys/core';
+import { GENESIS_HASH, chainHash, identifierKey, sha256Hex, type AccountInfo, type AddressMention, type Identifier, type Segment, type SourceItem, type Transfer } from '@olcys/core';
 import type { SqlExecutor } from './executor';
 
 export interface CaseRow {
   id: string;
   title: string;
   created_at: string;
+  sources: string;
+}
+
+export interface ScheduleRow {
+  case_id: string;
+  every_seconds: number;
+  next_run_at: string;
 }
 
 export interface RunRow {
@@ -77,6 +84,80 @@ export class Store {
       );
     }
     return rows[0];
+  }
+
+  /**
+   * The case for exactly these identifiers and sources; created if there is none yet.
+   * Analysing the same thing again therefore adds a run to the same case, so results can be compared.
+   */
+  async findOrCreateCase(title: string, identifiers: Identifier[], sources = 'synthetic'): Promise<CaseRow & { created: boolean }> {
+    const fingerprint = `${sources}|${identifiers.map(identifierKey).sort().join('|')}`;
+    const existing = (await this.db.query<CaseRow>('SELECT * FROM cases WHERE fingerprint = $1 ORDER BY created_at LIMIT 1', [fingerprint])).rows[0];
+    if (existing) return { ...existing, created: false };
+    const c = await this.createCase(title, identifiers);
+    await this.db.query('UPDATE cases SET fingerprint = $2, sources = $3 WHERE id = $1', [c.id, fingerprint, sources]);
+    return { ...c, sources, created: true };
+  }
+
+  /** The last completed run of the same case that started before the given run. */
+  async previousRun(runId: string): Promise<RunRow | undefined> {
+    return (
+      await this.db.query<RunRow>(
+        `SELECT p.* FROM runs p JOIN runs r ON r.case_id = p.case_id
+          WHERE r.id = $1 AND p.id <> r.id AND p.status = 'completed' AND p.started_at < r.started_at
+          ORDER BY p.started_at DESC LIMIT 1`,
+        [runId],
+      )
+    ).rows[0];
+  }
+
+  /** True while a run of the case is in progress (runs stuck for over ten minutes are treated as abandoned). */
+  async hasRunningRun(caseId: string): Promise<boolean> {
+    const since = new Date(Date.now() - 10 * 60_000).toISOString();
+    return (await this.db.query("SELECT 1 FROM runs WHERE case_id = $1 AND status = 'running' AND started_at > $2 LIMIT 1", [caseId, since])).rows.length > 0;
+  }
+
+  /** For each run of a case: what it reported as changed since the run before it (absent for a first run). */
+  async changeNotes(caseId: string): Promise<Map<string, { changed: boolean; summary: string }>> {
+    const { rows } = await this.db.query<{ run_id: string; payload: { changed: boolean; summary: string } }>(
+      "SELECT e.run_id, e.payload FROM run_events e JOIN runs r ON r.id = e.run_id WHERE r.case_id = $1 AND e.type = 'diff'",
+      [caseId],
+    );
+    return new Map(rows.map((r) => [r.run_id, { changed: r.payload.changed, summary: r.payload.summary }]));
+  }
+
+  // ------------------------------------------------------------------ schedules
+
+  /** Sets how often the case is analysed again; null switches repetition off. */
+  async setSchedule(caseId: string, everySeconds: number | null): Promise<void> {
+    if (everySeconds === null) {
+      await this.db.query('DELETE FROM case_schedules WHERE case_id = $1', [caseId]);
+      return;
+    }
+    await this.db.query(
+      `INSERT INTO case_schedules (case_id, every_seconds, next_run_at) VALUES ($1, $2, $3)
+       ON CONFLICT (case_id) DO UPDATE SET every_seconds = EXCLUDED.every_seconds, next_run_at = EXCLUDED.next_run_at`,
+      [caseId, everySeconds, new Date(Date.now() + everySeconds * 1000).toISOString()],
+    );
+  }
+
+  async schedule(caseId: string): Promise<ScheduleRow | undefined> {
+    return (await this.db.query<ScheduleRow>('SELECT case_id, every_seconds, next_run_at FROM case_schedules WHERE case_id = $1', [caseId])).rows[0];
+  }
+
+  /** Schedules whose time has come. */
+  async dueSchedules(now = new Date()): Promise<(ScheduleRow & { sources: string })[]> {
+    return (
+      await this.db.query<ScheduleRow & { sources: string }>(
+        'SELECT s.case_id, s.every_seconds, s.next_run_at, c.sources FROM case_schedules s JOIN cases c ON c.id = s.case_id WHERE s.next_run_at <= $1 ORDER BY s.next_run_at',
+        [now.toISOString()],
+      )
+    ).rows;
+  }
+
+  /** Moves a schedule to its next slot, counted from now. */
+  async bumpSchedule(caseId: string, everySeconds: number): Promise<void> {
+    await this.db.query('UPDATE case_schedules SET next_run_at = $2 WHERE case_id = $1', [caseId, new Date(Date.now() + everySeconds * 1000).toISOString()]);
   }
 
   async getCase(id: string): Promise<CaseRow | undefined> {

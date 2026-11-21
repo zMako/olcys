@@ -1,5 +1,5 @@
 import type { Transfer } from '@olcys/core';
-import type { RunSummary } from '@olcys/engine';
+import type { RunDiff, RunSummary } from '@olcys/engine';
 import { draftRequest, formatAmount, formatPln, type Link } from '@olcys/scoring';
 import { embeddedFonts } from './fonts';
 
@@ -14,6 +14,8 @@ export interface ReportInput {
   verification: { ok: boolean; checked: number; broken: number[] };
   /** All value movements of the analysed wallets. */
   transfers: (Transfer & { subject: string })[];
+  /** What changed since the previous analysis of the same case, if there was one. */
+  diff?: RunDiff;
   /** Sources used, as recorded with the run. */
   sources: { id: string; name: string; hosts: string[]; synthetic?: boolean }[];
 }
@@ -164,6 +166,17 @@ export function renderReport(input: ReportInput): string {
     out.push('<p class="small">To potencjalny przychód do wyjaśnienia, a nie dochód: nie uwzględnia kosztów nabycia i wymaga potwierdzenia u wskazanych podmiotów.</p>');
   }
   out.push(`<p>${tag('F')} Ustalenia opierają się na ${s.counts.snapshots} zapisanych stronach i odpowiedziach eksploratora łańcucha bloków. ${input.verification.ok ? 'Magazyn dowodów jest nienaruszony: zgadzają się wszystkie skróty treści i cały łańcuch skrótów.' : `Uwaga: magazyn dowodów jest naruszony w zapisach nr ${input.verification.broken.join(', ')}.`}</p>`);
+
+  // ---- changes since the previous analysis
+  if (input.diff) {
+    const d = input.diff;
+    out.push(h2(++n, 'Zmiany od poprzedniej analizy', 'O'));
+    out.push(`<p>Porównano z analizą nr <code>${esc(d.baseRunId)}</code>${d.baseAt ? ` z ${minute(d.baseAt)} UTC` : ''}. ${esc(d.summary)}</p>`);
+    const lines = [...d.links, ...d.profiles, ...d.accounts, ...d.indicators].map((x) => x.text);
+    for (const y of d.estimate) lines.push(`Szacunek za ${y.year}: ${formatPln(y.before)} → ${formatPln(y.after)}.`);
+    if (lines.length) out.push(`<ul>${lines.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`);
+    out.push(`<p class="small">Zapisane strony: zmienionych ${d.pages.changed}, nowych ${d.pages.added}, niepobranych tym razem ${d.pages.gone}. Wyniki obu analiz pozostają w bazie i można je porównać ponownie.</p>`);
+  }
 
   // ---- 2. identities
   out.push(h2(++n, 'Osoba i jej konta w sieci', 'O'));

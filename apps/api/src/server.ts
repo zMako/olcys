@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { z } from 'zod';
 import { guessIdentifier, makeIdentifier } from '@olcys/core';
-import { beginRun, reassessRun, runAnalysis, summarizeRun } from '@olcys/engine';
+import { beginRun, diffRuns, reassessRun, startScheduler, summarizeRun } from '@olcys/engine';
 import { renderReport } from '@olcys/report';
 import { DEFAULT_RULESET, type Ruleset } from '@olcys/scoring';
 import { loadRuntime } from './config';
@@ -53,15 +53,42 @@ app.post('/api/cases', async (req, reply) => {
 app.get<{ Params: { id: string } }>('/api/cases/:id', async (req, reply) => {
   const c = await rt.store.getCase(req.params.id);
   if (!c) return reply.status(404).send({ error: 'not_found' });
-  return { ...c, identifiers: await rt.store.caseIdentifiers(c.id), runs: await rt.store.listRuns(c.id) };
+  const schedule = await rt.store.schedule(c.id);
+  const notes = await rt.store.changeNotes(c.id);
+  const runs = (await rt.store.listRuns(c.id)).map((r) => ({
+    id: r.id, status: r.status, trigger: r.trigger, startedAt: r.started_at, finishedAt: r.finished_at, stats: r.stats,
+    /** What this analysis found changed since the one before it; null for the first one. */
+    changes: notes.get(r.id) ?? null,
+  }));
+  return { ...c, identifiers: await rt.store.caseIdentifiers(c.id), schedule: schedule ? { everySeconds: schedule.every_seconds, nextRunAt: schedule.next_run_at } : null, runs };
 });
 
+// Analyse the case again now. Answers at once with the run id.
 app.post<{ Params: { id: string } }>('/api/cases/:id/runs', async (req, reply) => {
   const c = await rt.store.getCase(req.params.id);
   if (!c) return reply.status(404).send({ error: 'not_found' });
-  const params = StartRun.parse(req.body ?? {});
-  const summary = await runAnalysis(depsFor(Sources.parse(req.body ?? {}).sources), c.id, params);
-  return reply.status(201).send(summary);
+  if (await rt.store.hasRunningRun(c.id)) return reply.status(409).send({ error: 'already_running' });
+  const body = z.object({ params: StartRun, wait: z.boolean().optional() }).parse(req.body ?? {});
+  const run = await beginRun(depsFor(c.sources as 'synthetic' | 'live'), c.id, body.params);
+  if (body.wait) return reply.status(201).send(await run.done);
+  run.done.catch((err) => app.log.error(err));
+  return reply.status(202).send({ caseId: c.id, runId: run.runId });
+});
+
+// How often the case is analysed again on its own; null switches repetition off.
+app.put<{ Params: { id: string } }>('/api/cases/:id/schedule', async (req, reply) => {
+  const c = await rt.store.getCase(req.params.id);
+  if (!c) return reply.status(404).send({ error: 'not_found' });
+  const { everySeconds } = z.object({ everySeconds: z.number().int().min(15).max(7 * 86_400).nullable() }).parse(req.body);
+  await rt.store.setSchedule(c.id, everySeconds);
+  const schedule = await rt.store.schedule(c.id);
+  return { schedule: schedule ? { everySeconds: schedule.every_seconds, nextRunAt: schedule.next_run_at } : null };
+});
+
+// What changed between this analysis and an earlier one of the same case (by default, the one before it).
+app.get<{ Params: { id: string }; Querystring: { against?: string } }>('/api/runs/:id/diff', async (req, reply) => {
+  if (!(await rt.store.getRun(req.params.id))) return reply.status(404).send({ error: 'not_found' });
+  return { diff: (await diffRuns(rt.store, req.params.id, req.query.against)) ?? null };
 });
 
 // One call for the UI: open a case for the entered identifiers and start the analysis.
@@ -69,8 +96,11 @@ app.post<{ Params: { id: string } }>('/api/cases/:id/runs', async (req, reply) =
 app.post('/api/analyze', async (req, reply) => {
   const body = CreateCase.extend({ params: StartRun, wait: z.boolean().optional(), sources: Mode }).parse(req.body);
   const identifiers = body.identifiers.map((i) => (typeof i === 'string' ? guessIdentifier(i) : makeIdentifier(i.kind, i.value)));
-  const c = await rt.store.createCase(body.title ?? identifiers.map((i) => i.value).join(', '), identifiers);
-  const run = await beginRun(depsFor(body.sources), c.id, body.params);
+  // The same identifiers and sources mean the same case: a repeated analysis can then be compared with the earlier ones.
+  const mode = body.sources ?? rt.defaultMode;
+  const c = await rt.store.findOrCreateCase(body.title ?? identifiers.map((i) => i.value).join(', '), identifiers, mode);
+  if (await rt.store.hasRunningRun(c.id)) return reply.status(409).send({ error: 'already_running', caseId: c.id });
+  const run = await beginRun(depsFor(mode), c.id, body.params);
   if (body.wait) return reply.status(201).send(await run.done);
   run.done.catch((err) => app.log.error(err));
   return reply.status(202).send({ caseId: c.id, runId: run.runId });
@@ -128,6 +158,7 @@ async function reportHtml(runId: string): Promise<string | undefined> {
     verification: await rt.store.verifyEvidence(runId),
     transfers: await rt.store.transfers(runId),
     sources: params.connectors ?? [],
+    diff: await diffRuns(rt.store, runId),
   });
 }
 
@@ -165,5 +196,8 @@ app.get<{ Params: { id: string } }>('/api/runs/:id/report.pdf', async (req, repl
     await browser.close();
   }
 });
+
+// Repeats analyses on their schedules, inside this process.
+startScheduler({ store: rt.store, depsFor: (sources) => depsFor(sources as 'synthetic' | 'live'), log: (m) => app.log.warn(m) });
 
 await app.listen({ port: rt.port, host: rt.host });

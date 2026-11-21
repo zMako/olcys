@@ -1,10 +1,33 @@
 import { useState, type ReactNode } from 'react';
-import type { AddressActivity, RunSummary, StoredRunEvent } from '@olcys/engine';
+import type { AddressActivity, RunDiff, RunSummary, StoredRunEvent } from '@olcys/engine';
 import { draftRequest, type Link, type OffRamp, type ProfileHistory } from '@olcys/scoring';
 import { BAND_COLOR } from './graph/Graph';
 import { addressId, type GNode, type Graph } from './graph/model';
 import { ACCOUNT_KIND, BAND, CATEGORY, CERTAINTY, CHAIN, KIND, LEVEL, OBFUSCATION, PLACEMENT, amounts, day, describe, minute, moreAddresses, pln, shortAddress } from './pl';
 import { Receipt } from './Receipt';
+
+/** A case and its analyses, as the API reports them. */
+export interface CaseInfo {
+  id: string;
+  schedule: { everySeconds: number; nextRunAt: string } | null;
+  runs: { id: string; status: string; trigger: string; startedAt: string; changes: { changed: boolean; summary: string } | null }[];
+}
+
+export interface CaseActions {
+  rerun(): void;
+  setSchedule(everySeconds: number | null): void;
+  openRun(id: string): void;
+}
+
+/** Date and time to the second: analyses of one case can be seconds apart. */
+const second = (at: string) => {
+  const iso = new Date(at).toISOString();
+  return `${iso.slice(0, 10)}, ${iso.slice(11, 19)}`;
+};
+const changeNote = (r: CaseInfo['runs'][number]) =>
+  r.status === 'running' ? 'w toku' : r.status === 'failed' ? 'nieudana' : !r.changes ? 'pierwsza analiza' : r.changes.changed ? r.changes.summary.replace(/^Od poprzedniej analizy: /, '').replace(/\.$/, '') : 'bez zmian';
+
+const EVERY: [number, string][] = [[30, 'co 30 sekund'], [300, 'co 5 minut'], [3600, 'co godzinę'], [86_400, 'co dobę']];
 
 export interface Vault {
   ok: boolean;
@@ -438,7 +461,7 @@ function EstimatePanel({ summary }: { summary?: RunSummary }) {
   );
 }
 
-function Overview({ graph, summary, events, cursor, vault, onSelect }: { graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id: string): void }) {
+function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseInfo, actions }: { graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions }) {
   if (!events.length) {
     return (
       <>
@@ -470,6 +493,24 @@ function Overview({ graph, summary, events, cursor, vault, onSelect }: { graph: 
         </ol>
       )}
 
+      {graph.finished && diff && (
+        <Section title="Co się zmieniło od poprzedniej analizy" layer="computed">
+          <p className={diff.changed ? 'changes' : 'quiet'}>
+            {diff.summary} Porównano z analizą z {minute(diff.baseAt)} UTC.
+          </p>
+          <ul className="changes-list">
+            {[...diff.links, ...diff.profiles, ...diff.accounts, ...diff.indicators].map((c, i) => (
+              <li key={i}>{c.text}</li>
+            ))}
+            {diff.estimate.map((y) => (
+              <li key={y.year}>
+                Szacunek za {y.year}: {pln(y.before)} → {pln(y.after)}.
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       {estimate && (
         <Section title="Do wyjaśnienia" layer="hypothesis">
           <button className="estimate-row" onClick={() => onSelect('estimate')}>
@@ -488,6 +529,39 @@ function Overview({ graph, summary, events, cursor, vault, onSelect }: { graph: 
               Tożsamość klienta zna giełda: <strong>{exchanges.join(', ')}</strong>. Projekt zapytania jest w szczegółach giełdy i w raporcie.
             </p>
           )}
+        </Section>
+      )}
+
+      {graph.finished && summary && caseInfo && actions && (
+        <Section title="Analizy tej sprawy" layer="fact">
+          <div className="case-controls">
+            <label>
+              Powtarzaj{' '}
+              <select value={caseInfo.schedule?.everySeconds ?? 0} onChange={(e) => actions.setSchedule(Number(e.target.value) || null)}>
+                <option value={0}>tylko na żądanie</option>
+                {EVERY.map(([seconds, label]) => (
+                  <option key={seconds} value={seconds}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={actions.rerun}>Analizuj ponownie teraz</button>
+          </div>
+          {caseInfo.schedule && <p className="quiet">Następna analiza: {second(caseInfo.schedule.nextRunAt)} UTC. Wynik ze zmianami otworzy się tu sam.</p>}
+          <ul className="runs">
+            {[...caseInfo.runs].reverse().slice(0, 6).map((r) => (
+              <li key={r.id} className={r.id === summary.runId ? 'current' : ''}>
+                <span>
+                  {second(r.startedAt)} UTC, {r.trigger === 'schedule' ? 'cykliczna' : 'na żądanie'}
+                  <br />
+                  <span className={r.changes?.changed ? 'run-changed' : 'quiet'}>{changeNote(r)}</span>
+                </span>
+                {r.id === summary.runId ? <span>otwarta</span> : r.status === 'completed' ? <button onClick={() => actions.openRun(r.id)}>otwórz</button> : null}
+              </li>
+            ))}
+          </ul>
+          <p className="quiet">Wynik każdej analizy jest zapisany i można go porównać z dowolną wcześniejszą.</p>
         </Section>
       )}
 
@@ -612,7 +686,7 @@ function Overview({ graph, summary, events, cursor, vault, onSelect }: { graph: 
   );
 }
 
-export function Panel(props: { node?: GNode; graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id?: string): void }) {
+export function Panel(props: { node?: GNode; graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id?: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions }) {
   const { node } = props;
   return (
     <aside className="side" aria-label="Szczegóły">

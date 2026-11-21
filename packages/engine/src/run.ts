@@ -10,10 +10,11 @@ import {
   type ActivitySummary, type Assessment, type CandidateTransfer, type Estimate, type Indicator, type OffRamp, type Ruleset, type ValuedTransfer, type WalletMember,
 } from '@olcys/scoring';
 import { readImage } from '@olcys/vision';
+import { compareRuns, type RunDiff } from './diff';
 import { EgressDeniedError, createEgress } from './egress';
 import type { RunEvent } from './events';
 
-export const ENGINE_VERSION = '0.7.0';
+export const ENGINE_VERSION = '0.8.0';
 
 /** Search parameters of a run. Stored with the run so it can be repeated exactly. */
 export interface RunParams {
@@ -717,6 +718,17 @@ export async function beginRun(
       }
       await store.saveAssessment(run.id, ruleset, assessment);
       await estimateStage(assessment, analysed);
+
+      // A repeated analysis ends by saying what changed since the last one.
+      const diff = await diffRuns(store, run.id);
+      if (diff) {
+        await emit({
+          type: 'diff', baseRunId: diff.baseRunId, changed: diff.changed, summary: diff.summary,
+          added: diff.links.filter((l) => l.kind === 'added').map((l) => ({ chain: l.chain, address: l.address })),
+          rescored: diff.links.filter((l) => l.kind === 'score' || l.kind === 'status').map((l) => ({ chain: l.chain, address: l.address })),
+          accounts: diff.accounts.filter((x) => x.kind === 'added').map((x) => ({ origin: x.origin, handle: x.handle })),
+        });
+      }
     } catch (err) {
       status = 'failed';
       error = err instanceof Error ? err.message : String(err);
@@ -729,6 +741,20 @@ export async function beginRun(
   };
 
   return { runId: run.id, done: execute() };
+}
+
+/**
+ * What changed between a run and an earlier run of the same case (by default, the last completed one before it).
+ * Returns undefined when there is nothing to compare with.
+ */
+export async function diffRuns(store: Store, runId: string, againstId?: string): Promise<RunDiff | undefined> {
+  const run = await store.getRun(runId);
+  const base = againstId ? await store.getRun(againstId) : await store.previousRun(runId);
+  if (!run || !base || base.case_id !== run.case_id || base.id === run.id) return undefined;
+  const pages = async (id: string) => (await store.snapshots(id)).map((x) => ({ url: x.url, sha256: x.sha256 }));
+  return compareRuns(await summarizeRun(store, base.id), await summarizeRun(store, run.id), { prev: await pages(base.id), cur: await pages(run.id) }, {
+    prev: new Date(base.started_at).toISOString(), cur: new Date(run.started_at).toISOString(),
+  });
 }
 
 /** Scores a stored run again, e.g. with changed rules. The earlier assessment is kept. */

@@ -47,12 +47,28 @@ type Handler = (path: string, query: URLSearchParams) => string | { json: unknow
 
 /** With `asOf`, the forum is rendered as it stood at that moment — used by the web archive. */
 function forumHandler(world: World, bases: Bases, asOf?: string): Handler {
-  const users = world.forum.users.filter((u) => !asOf || u.joinedAt <= asOf);
-  const threads = world.forum.threads.map((t) => ({ ...t, posts: t.posts.filter((p) => !asOf || p.at <= asOf) })).filter((t) => t.posts.length);
-  const sigOf = (u?: ForumUser) => (asOf ? u?.signatureHistory.filter((h) => h.from <= asOf) : u?.signatureHistory)?.at(-1)?.text;
-  const signature = (handle: string) => sigOf(users.find((u) => u.handle === handle));
-
   return (path, query) => {
+    // Read on every request: the forum accepts new posts and signature changes while it runs.
+    const users = world.forum.users.filter((u) => !asOf || u.joinedAt <= asOf);
+    const threads = world.forum.threads.map((t) => ({ ...t, posts: t.posts.filter((p) => !asOf || p.at <= asOf) })).filter((t) => t.posts.length);
+    const sigOf = (u?: ForumUser) => (asOf ? u?.signatureHistory.filter((h) => h.from <= asOf) : u?.signatureHistory)?.at(-1)?.text;
+    const signature = (handle: string) => sigOf(users.find((u) => u.handle === handle));
+    return forumPage(path, query, { users, threads, sigOf, signature, bases, live: !asOf });
+  };
+}
+
+interface ForumView {
+  users: ForumUser[];
+  threads: World['forum']['threads'];
+  sigOf(u?: ForumUser): string | undefined;
+  signature(handle: string): string | undefined;
+  bases: Bases;
+  /** False for archived copies, which cannot be written to. */
+  live: boolean;
+}
+
+function forumPage(path: string, query: URLSearchParams, { users, threads, sigOf, signature, bases, live }: ForumView): ReturnType<Handler> {
+  {
     if (path === '/') {
       const items = threads
         .map((t) => `<li class="thread"><a href="/watek/${t.id}">${esc(t.title)}</a> <span class="meta">dział: <span class="board">${esc(t.board)}</span>, postów: ${t.posts.length}</span></li>`)
@@ -75,7 +91,13 @@ ${sig ? `<div class="signature">${esc(sig)}</div>` : ''}
 </article>`;
         })
         .join('\n');
-      return page('forum', t.title, `<h1 class="thread-title">${esc(t.title)}</h1><p class="meta">Dział: <span class="board-name">${esc(t.board)}</span></p>${posts}`);
+      return page('forum', t.title, `<h1 class="thread-title">${esc(t.title)}</h1><p class="meta">Dział: <span class="board-name">${esc(t.board)}</span></p>${posts}${live ? `
+<section class="reply"><h2>Odpowiedz w wątku</h2>
+<form method="post" action="/watek/${t.id}/odpowiedz">
+<p><label>Nick<br><input name="nick" required maxlength="30" autocomplete="off"></label></p>
+<p><label>Treść<br><textarea name="tresc" required maxlength="2000" rows="4" style="width:100%"></textarea></label></p>
+<button>Wyślij odpowiedź</button> <span class="meta">Środowisko testowe: można pisać pod dowolnym nickiem.</span>
+</form></section>` : ''}`);
     }
 
     m = path.match(/^\/uzytkownik\/([^/]+)$/);
@@ -96,7 +118,12 @@ ${sig ? `<h2>Sygnatura</h2><div class="signature">${esc(sig)}</div>` : ''}
 </section>
 <section><h2>Posty użytkownika</h2><ul class="user-posts">
 ${own.map(({ t, p }) => `<li><a href="/watek/${t.id}#post-${p.id}">${esc(t.title)}</a> <time datetime="${p.at}">${day(p.at)}</time></li>`).join('\n')}
-</ul></section>`);
+</ul></section>${live ? `
+<section class="reply"><h2>Zmień sygnaturę</h2>
+<form method="post" action="/uzytkownik/${esc(encodeURIComponent(u.handle))}/sygnatura">
+<p><label>Nowa sygnatura<br><input name="tresc" required maxlength="300" style="width:100%" autocomplete="off"></label></p>
+<button>Zapisz sygnaturę</button>
+</form></section>` : ''}`);
     }
 
     if (path === '/szukaj') {
@@ -111,6 +138,34 @@ ${own.map(({ t, p }) => `<li><a href="/watek/${t.id}#post-${p.id}">${esc(t.title
 ${hitUsers.map((u) => `<li class="result-user"><a href="/uzytkownik/${esc(u.handle)}">${esc(u.handle)}</a>${u.displayName ? ` <span class="display-name">${esc(u.displayName)}</span>` : ''}</li>`).join('\n')}
 ${hitPosts.map(({ t, p }) => `<li class="result-post"><a href="/watek/${t.id}#post-${p.id}">${esc(t.title)}</a> <span class="meta">autor: ${esc(p.author)}</span></li>`).join('\n')}
 </ul>`);
+    }
+    return null;
+  }
+}
+
+/** Writing to the forum: a reply in a thread, or a new signature. The test environment has no accounts, so anyone can post under any nick. */
+function forumWrite(world: World): (path: string, form: URLSearchParams) => string | null {
+  const clean = (v: string | null, max: number) => (v ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, max);
+  return (path, form) => {
+    const now = new Date().toISOString();
+    let m = path.match(/^\/watek\/(\d+)\/odpowiedz$/);
+    if (m) {
+      const t = world.forum.threads.find((x) => x.id === Number(m![1]));
+      const nick = clean(form.get('nick'), 30).replace(/[^\p{L}\p{N}_.-]/gu, '');
+      const text = clean(form.get('tresc'), 2000);
+      if (!t || !nick || !text) return null;
+      if (!world.forum.users.some((u) => u.handle === nick)) world.forum.users.push({ handle: nick, personaId: 'visitor', joinedAt: now, signatureHistory: [] });
+      const id = Math.max(0, ...world.forum.threads.flatMap((x) => x.posts.map((p) => p.id))) + 1;
+      t.posts.push({ id, author: nick, at: now, text });
+      return `/watek/${t.id}#post-${id}`;
+    }
+    m = path.match(/^\/uzytkownik\/([^/]+)\/sygnatura$/);
+    if (m) {
+      const u = world.forum.users.find((x) => x.handle === decodeURIComponent(m![1]));
+      const text = clean(form.get('tresc'), 300);
+      if (!u || !text) return null;
+      u.signatureHistory.push({ from: now, text });
+      return `/uzytkownik/${encodeURIComponent(u.handle)}`;
     }
     return null;
   };
@@ -378,10 +433,23 @@ export async function startWorld(
     rates: ratesHandler(),
     archive: archiveHandler(world, bases),
   };
+  const write = forumWrite(world);
   const servers: Server[] = [];
   for (const site of ['forum', 'code', 'ads', 'explorer', 'rates', 'archive'] as AnySite[]) {
     const server = createServer((req, res) => {
       const url = new URL(req.url ?? '/', 'http://local');
+      if (req.method === 'POST' && site === 'forum') {
+        let body = '';
+        req.on('data', (chunk: Buffer) => {
+          if (body.length < 16_384) body += chunk.toString('utf8');
+        });
+        req.on('end', () => {
+          const to = write(url.pathname, new URLSearchParams(body));
+          if (!to) res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }).end('Nie udało się zapisać.');
+          else res.writeHead(303, { location: to }).end();
+        });
+        return;
+      }
       let html: ReturnType<Handler> = null;
       try {
         html = req.method === 'GET' ? handlers[site](url.pathname, url.searchParams) : null;

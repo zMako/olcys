@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import type { RunSummary, StoredRunEvent } from '@olcys/engine';
+import type { RunDiff, RunSummary, StoredRunEvent } from '@olcys/engine';
 import { GraphView, Legend } from './graph/Graph';
 import { buildGraph, layoutGraph } from './graph/model';
-import { Panel, type Vault } from './Panel';
+import { Panel, type CaseActions, type CaseInfo, type Vault } from './Panel';
 import { describe } from './pl';
 
 /** How long each kind of step stays on screen at normal speed, in milliseconds. */
@@ -33,6 +33,9 @@ export function App() {
   const [sources, setSources] = useState<'synthetic' | 'live'>(query.get('sources') === 'live' ? 'live' : 'synthetic');
   const [view, setView] = useState<'graph' | 'report'>(query.get('view') === 'report' ? 'report' : 'graph');
   const [error, setError] = useState<string>();
+  const [diff, setDiff] = useState<RunDiff | null>();
+  const [caseInfo, setCaseInfo] = useState<CaseInfo>();
+  const following = useRef(true); // open new analyses of this case as they finish
   const autoSelected = useRef(false);
   const jumpToEnd = useRef(query.get('end') === '1');
   const startAt = useRef(query.get('step'));
@@ -45,6 +48,7 @@ export function App() {
     setEvents([]);
     setSummary(undefined);
     setVault(undefined);
+    setDiff(undefined);
     setStatus('running');
     const poll = async () => {
       try {
@@ -58,8 +62,11 @@ export function App() {
           setTimeout(poll, 250);
           return;
         }
-        setSummary(await getJson<RunSummary>(`/api/runs/${runId}`));
+        const result = await getJson<RunSummary>(`/api/runs/${runId}`);
+        setSummary(result);
         setVault((await getJson<{ verification: Vault }>(`/api/runs/${runId}/evidence`)).verification);
+        setDiff((await getJson<{ diff: RunDiff | null }>(`/api/runs/${runId}/diff`)).diff);
+        setCaseInfo(await getJson<CaseInfo>(`/api/cases/${result.caseId}`));
         setStatus(res.status === 'failed' ? 'failed' : 'completed');
       } catch (err) {
         if (!stop) setError(err instanceof Error ? err.message : String(err));
@@ -92,13 +99,63 @@ export function App() {
   const layout = useMemo(() => layoutGraph(graph), [graph]);
   const atEnd = status !== 'running' && events.length > 0 && cursor >= events.length;
 
-  // When the replay reaches the end, open the strongest result so the receipt is on screen.
+  /** Opens another analysis of the case, at its result. */
+  const openRun = useCallback((id: string) => {
+    jumpToEnd.current = true;
+    autoSelected.current = false;
+    setSelected(undefined);
+    setCursor(0);
+    setRunId(id);
+  }, []);
+
+  // While a case is open, watch for new analyses of it: scheduled ones arrive on their own.
   useEffect(() => {
-    if (!atEnd || autoSelected.current || selected) return;
+    if (!summary || status === 'running') return;
+    const timer = setInterval(async () => {
+      try {
+        const info = await getJson<CaseInfo>(`/api/cases/${summary.caseId}`);
+        setCaseInfo(info);
+        // Open a newer analysis only if it found something changed: one that found nothing must not pull the analyst away from what they are reading.
+        const openAt = info.runs.find((r) => r.id === summary.runId)?.startedAt ?? '';
+        const news = [...info.runs].reverse().find((r) => r.status === 'completed' && r.startedAt > openAt && r.changes?.changed);
+        if (following.current && news) openRun(news.id);
+      } catch {
+        // the API may be restarting; try again on the next tick
+      }
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [summary, status, openRun]);
+
+  const actions: CaseActions | undefined = summary && {
+    rerun: () => {
+      following.current = true;
+      void getJson<{ runId: string }>(`/api/cases/${summary.caseId}/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+        .then((r) => openRun(r.runId))
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    },
+    setSchedule: (everySeconds) => {
+      following.current = true;
+      void getJson(`/api/cases/${summary.caseId}/schedule`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ everySeconds }) })
+        .then(() => getJson<CaseInfo>(`/api/cases/${summary.caseId}`))
+        .then(setCaseInfo)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    },
+    openRun: (id) => {
+      // Looking at an older analysis on purpose: do not jump away when a newer one arrives.
+      following.current = id === [...(caseInfo?.runs ?? [])].reverse().find((r) => r.status === 'completed')?.id;
+      openRun(id);
+    },
+  };
+
+  // When the replay reaches the end, open the strongest result so the receipt is on screen —
+  // unless this is a repeated analysis, where the list of changes is what matters.
+  useEffect(() => {
+    if (!atEnd || autoSelected.current || selected || diff === undefined) return;
     autoSelected.current = true;
+    if (diff) return;
     const best = graph.nodes.filter((n) => n.type === 'address' && n.link?.status === 'attributed').sort((a, b) => b.link!.score - a.link!.score)[0];
     if (best) setSelected(best.id);
-  }, [atEnd, graph, selected]);
+  }, [atEnd, graph, selected, diff]);
 
   const analyze = useCallback(
     async (e: FormEvent) => {
@@ -111,6 +168,7 @@ export function App() {
       setPlaying(true);
       autoSelected.current = false;
       jumpToEnd.current = false;
+      following.current = true;
       try {
         const res = await getJson<{ runId: string }>('/api/analyze', {
           method: 'POST',
@@ -237,7 +295,7 @@ export function App() {
               </>
             )}
           </div>
-          <Panel node={node} graph={graph} summary={atEnd || node ? summary : undefined} events={events} cursor={cursor} vault={atEnd ? vault : undefined} onSelect={setSelected} />
+          <Panel node={node} graph={graph} summary={atEnd || node ? summary : undefined} events={events} cursor={cursor} vault={atEnd ? vault : undefined} onSelect={setSelected} diff={atEnd ? diff : undefined} caseInfo={caseInfo} actions={actions} />
         </main>
       )}
     </div>
