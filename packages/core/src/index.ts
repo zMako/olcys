@@ -3,6 +3,7 @@ export * from './extract';
 export * from './identifiers';
 export * from './connector';
 export * from './hash';
+export * from './fingerprints';
 export * from './labels';
 export * from './chain';
 export * from './signed';

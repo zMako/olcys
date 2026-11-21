@@ -1,4 +1,4 @@
-import { GENESIS_HASH, chainHash, identifierKey, sha256Hex, type AccountInfo, type AddressMention, type Identifier, type Segment, type SourceItem, type Transfer } from '@olcys/core';
+import { GENESIS_HASH, chainHash, identifierKey, sha256Hex, type AccountInfo, type AddressMention, type Deployment, type Fingerprint, type Identifier, type Segment, type SourceItem, type Transfer } from '@olcys/core';
 import type { SqlExecutor } from './executor';
 
 export interface CaseRow {
@@ -278,13 +278,13 @@ export class Store {
   async saveDocument(runId: string, connectorId: string, origin: string, matched: Identifier, item: SourceItem): Promise<{ id: string; created: boolean }> {
     const { rows } = await this.db.query<{ id: string }>(
       `INSERT INTO documents (run_id, snapshot_id, connector_id, origin, resource_id, url, doc_type, title, author_handle,
-         author_display_name, author_profile_url, published_at, container, relation, matched_identifier, segments, discovered)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15::jsonb, $16::jsonb, $17::jsonb)
+         author_display_name, author_profile_url, published_at, container, relation, matched_identifier, segments, discovered, fingerprints)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18::jsonb)
        ON CONFLICT (run_id, connector_id, resource_id) DO NOTHING RETURNING id`,
       [
         runId, item.snapshotId, connectorId, origin, item.resourceId, item.url, item.docType, item.title ?? null,
         item.author?.handle ?? null, item.author?.displayName ?? null, item.author?.profileUrl ?? null, item.publishedAt ?? null,
-        json(item.container), item.relation, json(matched), json(item.segments), json(item.discovered),
+        json(item.container), item.relation, json(matched), json(item.segments), json(item.discovered), json(item.fingerprints ?? []),
       ],
     );
     if (rows[0]) return { id: rows[0].id, created: true };
@@ -377,6 +377,20 @@ export class Store {
     }
   }
 
+  async saveDeployment(runId: string, d: Deployment): Promise<void> {
+    await this.db.query(
+      `INSERT INTO deployments (run_id, chain, contract, creator, tx_hash, at, source_url, snapshot_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (run_id, chain, contract) DO NOTHING`,
+      [runId, d.chain, d.contract, d.creator, d.txHash ?? null, d.at ?? null, d.sourceUrl ?? null, d.snapshotId ?? null],
+    );
+  }
+
+  /** Contracts and the addresses that created them, as far as the run looked them up. */
+  async deployments(runId: string): Promise<Deployment[]> {
+    const { rows } = await this.db.query<Record<string, any>>('SELECT chain, contract, creator, tx_hash, at, source_url FROM deployments WHERE run_id = $1 ORDER BY id', [runId]);
+    return rows.map((r) => ({ chain: r.chain, contract: r.contract, creator: r.creator, txHash: r.tx_hash ?? undefined, at: r.at ?? undefined, sourceUrl: r.source_url ?? undefined }));
+  }
+
   /** Every stored value movement of a run, oldest first. */
   async transfers(runId: string): Promise<(Transfer & { subject: string })[]> {
     const { rows } = await this.db.query<Record<string, any>>(
@@ -420,7 +434,7 @@ export class Store {
     const documents = (
       await this.db.query<Record<string, never>>(
         `SELECT d.id, d.origin, d.connector_id, d.url, d.doc_type, d.title, d.author_handle, d.author_display_name, d.author_profile_url,
-                d.relation, d.container, d.discovered, d.published_at, s.fetched_at, s.sha256
+                d.relation, d.container, d.discovered, d.fingerprints, d.published_at, s.fetched_at, s.sha256
            FROM documents d JOIN snapshots s ON s.id = d.snapshot_id WHERE d.run_id = $1 ORDER BY d.created_at, d.id`,
         [runId],
       )
@@ -430,6 +444,7 @@ export class Store {
       authorProfileUrl: opt<string>(r.author_profile_url), relation: r.relation as string,
       container: opt<{ kind: string; id?: string; title?: string; section?: string; url?: string; stats?: Record<string, number> }>(r.container),
       discovered: (r.discovered ?? []) as Identifier[], publishedAt: opt<string>(r.published_at), fetchedAt: r.fetched_at as string, snapshotSha256: r.sha256 as string,
+      fingerprints: (r.fingerprints ?? []) as Fingerprint[],
     }));
     const hits = (
       await this.db.query<Record<string, string>>('SELECT document_id, identifier_kind, identifier_value, identifier_normalized, relation FROM document_hits WHERE run_id = $1 ORDER BY id', [runId])
@@ -461,6 +476,8 @@ export class Store {
     return {
       seeds: await this.caseIdentifiers(run.case_id), documents, hits, mentions, proofs, accounts: await this.chainAccounts(runId), sources,
       wallets, amountMatches: await this.amountMatches<any>(runId), names: await this.nameRecords<any>(runId),
+      deployments: await this.deployments(runId),
+      transfers: (await this.transfers(runId)).map((t) => ({ subject: t.subject, chain: t.chain as string, txHash: t.txHash, at: t.at, from: t.from, to: t.to })),
     };
   }
 

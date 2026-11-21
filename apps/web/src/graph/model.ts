@@ -29,6 +29,8 @@ export interface GNode {
   fresh?: boolean;
   /** Nothing on the web ties this account to the person; it was found through the person's wallet. */
   viaWallet?: boolean;
+  /** Found because its nick contains the entered one; only a hard identifier makes it the person's. */
+  viaSimilar?: boolean;
   /** The profile showed a different address in the past. */
   changed?: boolean;
   /** Number of addresses in the same wallet, once known. */
@@ -96,8 +98,9 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
   let ranked = false;
   const histories: Graph['histories'] = [];
   const variants = new Set<string>(); // other spellings of the entered nick
+  const similars = new Set<string>(); // nicks that merely contain the entered one
   const matches: Graph['matches'] = [];
-  const trailRoot = new Map<string, { root: string; exchange: boolean }>(); // hidden address → node of the published address it is tied to
+  const trailRoot = new Map<string, { root: string; label: string }>(); // hidden address → node of the published address it is tied to
   let finished = false;
   let touched: string[] = [];
 
@@ -110,6 +113,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
     if (!src || !target || src === target) return;
     const fromSeed = nodes.get(src)?.type === 'seed';
     const variant = variants.has(leadKey(via.kind, via.value));
+    const similar = similars.has(leadKey(via.kind, via.value));
     // Two profiles that link to each other are one connection, not two.
     const back = edges.get(`${target}>${src}:${via.kind}`);
     if (back) {
@@ -118,7 +122,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
     }
     edge({
       id: `${src}>${target}:${via.kind}`, from: src, to: target, kind: fromSeed ? 'match' : 'lead',
-      label: variant ? 'podobny nick' : fromSeed ? (KIND[via.kind] ?? via.kind) : (LEAD[via.kind] ?? via.kind), weak: via.kind === 'full_name' || variant, firstSeq: seq,
+      label: similar ? 'nick z dopiskiem' : variant ? 'podobny nick' : fromSeed ? (KIND[via.kind] ?? via.kind) : (LEAD[via.kind] ?? via.kind), weak: via.kind === 'full_name' || variant || similar, firstSeq: seq,
     });
   };
 
@@ -137,6 +141,10 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
           const seed = [...nodes.values()].find((n) => n.type === 'seed');
           if (seed) leadSource.set(key, seed.id);
           variants.add(key);
+        } else if (e.origin === 'similar') {
+          const seed = [...nodes.values()].find((n) => n.type === 'seed');
+          if (seed) leadSource.set(key, seed.id);
+          similars.add(key);
         } else if (e.origin === 'wallet') {
           // searched because the blockchain pointed here; the edge is drawn when an account turns up
         } else if (e.kind !== 'crypto_address' && e.fromDocumentId && docAccount.has(e.fromDocumentId) && !leadSource.has(key)) {
@@ -158,6 +166,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
           existing.thirdParty = false;
         }
         docAccount.set(e.documentId, id);
+        if (e.relation !== 'mention' && similars.has(leadKey(e.via.kind, e.via.value))) nodes.get(id)!.viaSimilar = true;
         if (e.relation !== 'mention') leadEdge(e.via, id, e.seq);
         touched = [id];
         break;
@@ -178,7 +187,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
         break;
       case 'trail': {
         const root = addressId(e.chain, e.root);
-        trailRoot.set(e.address, { root, exchange: e.rule === 'D2' });
+        trailRoot.set(e.address, { root, label: e.rule === 'D2' ? 'ten sam klient giełdy' : e.rule === 'K3' ? 'kontrakt z tego adresu' : 'ten sam portfel' });
         touched = [root];
         break;
       }
@@ -220,7 +229,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
             : info?.docType === 'archive' ? 'archiwum'
             : e.segmentKind === 'quote' || e.segmentKind === 'signature' ? SEGMENT[e.segmentKind]
             : (DOC[info?.docType ?? ''] ?? 'treść');
-          placements.set(eid, (placements.get(eid) ?? new Set()).add(e.method === 'plain' || e.method === 'qr' ? where : `${where}, adres ukryty`));
+          placements.set(eid, (placements.get(eid) ?? new Set()).add(e.method === 'deployer' ? 'twórca kontraktu' : e.method === 'plain' || e.method === 'qr' ? where : `${where}, adres ukryty`));
           const q = quotes.get(eid) ?? { quote: 0, other: 0 };
           if (e.segmentKind === 'quote') q.quote++;
           else q.other++;
@@ -231,7 +240,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
           // The account advertises a hidden address of the person's wallet: the blockchain ties the two together.
           const tie = trailRoot.get(e.address);
           if (tie && e.segmentKind !== 'quote' && nodes.has(tie.root)) {
-            edge({ id: `${acc}>wallet>${tie.root}`, from: acc, to: tie.root, kind: 'wallet', label: tie.exchange ? 'ten sam klient giełdy' : 'ten sam portfel', firstSeq: e.seq });
+            edge({ id: `${acc}>wallet>${tie.root}`, from: acc, to: tie.root, kind: 'wallet', label: tie.label, firstSeq: e.seq });
             nodes.get(acc)!.viaWallet = true;
           }
         }

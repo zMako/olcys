@@ -59,7 +59,7 @@ describe('evidence graph', () => {
     const g = buildGraph(events);
     const of = (type: string) => g.nodes.filter((n) => n.type === type);
     expect(of('seed').map((n) => n.title)).toEqual(['szklane_domy']);
-    expect(of('account').filter((n) => n.clusterId === 'T1').map((n) => n.title).sort()).toEqual(['SzklaneDomy', 'eth_od_reki', 'nocny_kantor', 'szklane_domy', 'szklanedomy']);
+    expect(of('account').filter((n) => n.clusterId === 'T1').map((n) => n.title).sort()).toEqual(['SzklaneDomy', 'eth_od_reki', 'nocny_kantor', 'szklane_domy', 'szklanedomy', 'szklanedomy-labs']);
     // the account found through the wallet is tied to the wallet's published address, not to any other account
     expect(g.nodes.find((n) => n.title === 'nocny_kantor')).toMatchObject({ viaWallet: true });
     expect(g.edges.filter((e) => e.kind === 'wallet').map((e) => [e.from, e.to]).sort((a, b) => b[0].localeCompare(a[0]))).toEqual([
@@ -71,7 +71,8 @@ describe('evidence graph', () => {
     expect(g.nodes.find((n) => n.address === hero.wallets.find((w) => w.label === 'sales')!.address)!.link).toMatchObject({ score: 85 });
     expect(of('account').filter((n) => n.clusterLevel === 'name_ambiguous').map((n) => n.title)).toEqual(['czarek_b']);
     expect(of('account').filter((n) => n.thirdParty).length).toBeGreaterThan(2);
-    expect(of('address')).toHaveLength(summary.addresses.length);
+    // every address found in the sources, plus the one that was never published: the creator of his contract
+    expect(of('address')).toHaveLength(summary.addresses.length + 1);
     expect(of('service').filter((n) => n.cashOut).length).toBe(6);
     // both the Bitcoin wallet and the Ethereum address lead to the same exchange: one node, two addresses
     const exchange = of('service').find((n) => n.title === 'BałtykEx')!;

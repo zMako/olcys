@@ -109,7 +109,7 @@ function NodeMark({ n, b }: { n: GNode; b: Box }) {
         <rect className={`n-box${nameOnly ? ' dashed' : ''}`} width={b.w} height={b.h} rx="4" />
         {n.clusterId && !nameOnly && <rect className="n-bar" width="4" height={b.h} rx="2" />}
         <text className="t-title" x="16" y="21">{cut(n.title, 22)}</text>
-        <text className="t-sub" x="16" y="38">{n.changed ? `${n.sub}, podmienił adres` : n.viaWallet ? `${n.sub}, przez łańcuch` : n.sub}</text>
+        <text className="t-sub" x="16" y="38">{n.changed ? `${n.sub}, podmienił adres` : n.viaWallet ? `${n.sub}, przez łańcuch` : n.viaSimilar ? `${n.sub}, nick z dopiskiem` : n.sub}</text>
         {n.fresh && <text className="t-fresh" x={b.w - 10} y="20" textAnchor="end">nowe</text>}
       </>
     );
@@ -223,7 +223,7 @@ export function GraphView({ graph, layout, selected, onSelect }: { graph: Graph;
 
       {groups.map((g) => (
         <g key={g.id}>
-          <rect className={`group${g.level.startsWith('name') ? ' dashed' : ''}`} x={g.box.x} y={g.box.y} width={g.box.w} height={g.box.h} rx="8" />
+          <rect className={`group${g.identityCap < 60 ? ' dashed' : ''}`} x={g.box.x} y={g.box.y} width={g.box.w} height={g.box.h} rx="8" />
           <text className="group-title" x={g.box.x + 2} y={g.box.y - 6}>
             {GROUP[g.level]}{g.identityCap < 100 ? `, najwyżej ${g.identityCap}%` : ''}
           </text>

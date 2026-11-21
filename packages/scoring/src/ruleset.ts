@@ -41,11 +41,26 @@ export interface Ruleset {
   names: { mutualMin: number };
   /** Only addresses scoring at least `minScore` enter the PLN estimate. */
   estimate: { minScore: number };
+  /**
+   * An address the person never published, but from which a contract they show as their own was created.
+   * Such a link is limited to `max`; if the address is also published directly, the deployment adds `bonus`.
+   */
+  deployer: { max: number; bonus: number };
+  /** A public key counts as one person's only if at most this many accounts carry it. */
+  keys: { maxHolders: number };
+  /**
+   * Daily rhythm. The person's quiet hours are the `quietHours` consecutive hours with the least web activity,
+   * usable when there are at least `minWebEvents` dated items and at most `maxWebInQuiet` of them fall inside.
+   * An address with at least `addressMinTransfers` outgoing transfers of which `conflictShare` fall in the quiet
+   * hours loses `conflictPenalty` points. The person-level comparison needs `minTransfers` and is called
+   * consistent when a random rhythm would produce it with probability at most `significance`.
+   */
+  rhythm: { quietHours: number; minWebEvents: number; maxWebInQuiet: number; minTransfers: number; significance: number; addressMinTransfers: number; conflictShare: number; conflictPenalty: number };
 }
 
 export const DEFAULT_RULESET: Ruleset = {
   id: 'olcys-kas',
-  version: '1.0.0',
+  version: '1.1.0',
   name: 'Metoda KAS z kontrolą tożsamości',
   bands: [
     { id: 'very_high', label: 'BARDZO WYSOKIE', min: 80 },
@@ -61,7 +76,7 @@ export const DEFAULT_RULESET: Ruleset = {
   },
   synergy: { rule: 'S1', points: 15, minOrigins: 2 },
   obfuscation: { rule: 'O1', points: 3 },
-  identityCaps: { entered: 100, publisher: 100, handle_variant: 79, name_unique: 59, name_ambiguous: 39 },
+  identityCaps: { entered: 100, publisher: 100, handle_variant: 79, name_unique: 59, handle_similar: 49, name_ambiguous: 39 },
   proof: { unboundPoints: 30, unboundMax: 95 },
   exclusions: {
     labelCategories: ['exchange', 'exchange_deposit', 'p2p', 'payment_gateway', 'card', 'otc', 'dex', 'token', 'contract', 'mixer', 'charity', 'bridge'],
@@ -80,6 +95,9 @@ export const DEFAULT_RULESET: Ruleset = {
   depositReuse: { maxOtherSenders: 3 },
   names: { mutualMin: 95 },
   estimate: { minScore: 60 },
+  deployer: { max: 70, bonus: 10 },
+  keys: { maxHolders: 3 },
+  rhythm: { quietHours: 7, minWebEvents: 10, maxWebInQuiet: 0.1, minTransfers: 8, significance: 0.05, addressMinTransfers: 5, conflictShare: 0.5, conflictPenalty: 10 },
 };
 
 export function bandOf(ruleset: Ruleset, score: number): { id: BandId; label: string } {

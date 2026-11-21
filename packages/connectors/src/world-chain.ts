@@ -1,4 +1,4 @@
-import { classifyCode, type AccountInfo, type Chain, type ChainConnector, type LabelCategory, type Transfer } from '@olcys/core';
+import { classifyCode, type AccountInfo, type Chain, type ChainConnector, type Deployment, type LabelCategory, type Transfer } from '@olcys/core';
 
 interface ApiAccount {
   address: string;
@@ -9,6 +9,10 @@ interface ApiAccount {
   firstSeen: string | null;
   lastSeen: string | null;
   balances: { asset: string; amount: number }[];
+  /** Present for contracts whose creation the explorer indexed. */
+  creator?: string;
+  creationTx?: string;
+  createdAt?: string;
 }
 
 /** Explorer of the synthetic environment ("BlokSkan"). Real explorers plug in through the same interface. */
@@ -44,6 +48,20 @@ export function createWorldChainConnector(base: string): ChainConnector {
       if (res.status !== 200) throw new Error(`Explorer returned ${res.status} for ${address}`);
       const body = JSON.parse(res.body) as { transfers: Omit<Transfer, 'chain' | 'snapshotId'>[] };
       return body.transfers.map((t) => ({ ...t, chain, snapshotId: res.snapshotId }));
+    },
+    async getCreator(chain, contract, ctx): Promise<Deployment | undefined> {
+      const url = `${root}/api/v1/address/${encodeURIComponent(contract)}`;
+      const res = await ctx.fetch(url);
+      if (res.status !== 200) return undefined;
+      const a = JSON.parse(res.body) as ApiAccount;
+      return a.creator ? { chain, contract: a.address, creator: a.creator, txHash: a.creationTx, at: a.createdAt, sourceUrl: url, snapshotId: res.snapshotId } : undefined;
+    },
+    async getDeployed(chain, address, ctx): Promise<Deployment[]> {
+      const url = `${root}/api/v1/address/${encodeURIComponent(address)}/deployed`;
+      const res = await ctx.fetch(url);
+      if (res.status !== 200) return [];
+      const body = JSON.parse(res.body) as { address: string; contracts: { address: string; txHash: string; at: string }[] };
+      return body.contracts.map((c) => ({ chain, contract: c.address, creator: body.address, txHash: c.txHash, at: c.at, sourceUrl: url, snapshotId: res.snapshotId }));
     },
   };
 }

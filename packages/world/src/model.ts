@@ -4,7 +4,7 @@ import type { Wallet } from './wallet';
 
 export type Site = 'forum' | 'code' | 'ads';
 
-export type Archetype = 'open_dev' | 'p2p_trader' | 'forum_talker' | 'giveaway_hunter' | 'careful' | 'fp_poster' | 'quoter' | 'hero' | 'namesake';
+export type Archetype = 'open_dev' | 'p2p_trader' | 'forum_talker' | 'giveaway_hunter' | 'careful' | 'fp_poster' | 'quoter' | 'hero' | 'namesake' | 'scripted';
 
 export interface Persona {
   id: string;
@@ -54,6 +54,10 @@ export interface CodeUser {
   links: { label: string; site: Site; path: string }[];
   /** Profile README lines. `href` entries render as links whose address is only in the URL. */
   readme: { text: string; href?: string }[];
+  /** The e-mail the account was registered with. Never shown, but its hash addresses the avatar picture. */
+  avatarEmail?: string;
+  /** Public SSH keys the account uploaded, listed at /<handle>.keys. */
+  sshKeys?: string[];
 }
 
 export interface CodeRepo {
@@ -158,4 +162,6 @@ export interface WorldChain {
   wallets: { root: string; members: string[] }[];
   /** On-chain names (like ENS): the address a name points to and the records its owner attached. */
   names: { name: string; address: string; personaId: string; records: Record<string, string> }[];
+  /** Contracts and the addresses that created them. */
+  deployments: { contract: string; creator: string; txHash: string; at: string }[];
 }

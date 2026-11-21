@@ -76,3 +76,19 @@ export function usernameVariants(value: string): string[] {
   if (parts.length < 2) return [];
   return [...new Set(['', '_', '-', '.'].map((sep) => parts.join(sep)))].filter((v) => v !== base);
 }
+
+/** A nick reduced to its letters and digits: "Szklane_Domy" → "szklanedomy". */
+export function handleStem(value: string): string {
+  return normalizeIdentifier('username', value).replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+/**
+ * True when one nick contains the other but they are not the same nick ("szklanedomy" and "szklanedomy-labs").
+ * People add a suffix when their usual nick is taken or when they open a second account — and so do impostors,
+ * which is why a similar nick is only ever a candidate, never a match.
+ */
+export function similarHandle(a: string, b: string, minLength = 6): boolean {
+  const [x, y] = [handleStem(a), handleStem(b)];
+  if (x === y || Math.min(x.length, y.length) < minLength) return false;
+  return x.includes(y) || y.includes(x);
+}

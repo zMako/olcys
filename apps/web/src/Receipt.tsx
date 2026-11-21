@@ -4,7 +4,7 @@ import { BAND_COLOR } from './graph/Graph';
 import { BAND, CHAIN } from './pl';
 
 const points = (r: ReceiptLine) =>
-  r.points === null ? '' : r.effect === 'bonus' ? `+${r.points}` : r.effect === 'cap' ? `do ${r.points}` : String(r.points);
+  r.points === null ? '' : r.effect === 'bonus' ? `+${r.points}` : r.effect === 'penalty' ? `−${r.points}` : r.effect === 'cap' ? `do ${r.points}` : String(r.points);
 
 /**
  * The Confidence Score as a till receipt: every rule that fired is a line with its points,

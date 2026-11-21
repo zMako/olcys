@@ -1,7 +1,7 @@
 import { parseHtml, textOf } from '@olcys/connectors';
 import {
-  bundledLabel, extractAddresses, findCryptoAmounts, findPlnAmounts, findSignedMessages, identifierKey, makeIdentifier, usernameVariants, verifySignedMessage,
-  type ArchiveConnector, type FetchInit, type NameRecord, type NameService, type SourceItem, type AccountInfo, type AddressLabel, type Chain, type ChainConnector, type Identifier, type PriceConnector, type PriceQuote,
+  bundledLabel, extractAddresses, findCryptoAmounts, findPlnAmounts, findSignedMessages, identifierKey, makeIdentifier, similarHandle, usernameVariants, verifySignedMessage,
+  type ArchiveConnector, type Deployment, type FetchInit, type NameRecord, type NameService, type SourceItem, type AccountInfo, type AddressLabel, type Chain, type ChainConnector, type Identifier, type PriceConnector, type PriceQuote,
   type RateQuote, type RatesConnector, type SourceConnector, type Transfer,
 } from '@olcys/core';
 import type { MentionView, Store } from '@olcys/db';
@@ -14,7 +14,7 @@ import { compareRuns, type RunDiff } from './diff';
 import { EgressDeniedError, createEgress } from './egress';
 import type { RunEvent } from './events';
 
-export const ENGINE_VERSION = '0.8.0';
+export const ENGINE_VERSION = '0.9.0';
 
 /** Search parameters of a run. Stored with the run so it can be repeated exactly. */
 export interface RunParams {
@@ -41,10 +41,14 @@ export interface RunParams {
   maxWalletSearches: number;
   /** How many of the subject's addresses are asked for their on-chain name. */
   maxNameLookups: number;
+  /** How many accounts with a nick that merely contains the entered one are read as candidates. */
+  maxSimilarHandles: number;
+  /** How many addresses are asked which contracts they created. */
+  maxDeployedLookups: number;
 }
 
 export const DEFAULT_PARAMS: RunParams = { maxDepth: 3, pivotOnAddresses: true, maxIdentifiers: 160, maxChainAddresses: 25, maxCounterparties: 40, maxHops: 8,
-  maxImages: 40, maxArchivedProfiles: 6, maxCapturesPerProfile: 5, maxRounds: 3, maxWalletSearches: 30, maxNameLookups: 20,
+  maxImages: 40, maxArchivedProfiles: 6, maxCapturesPerProfile: 5, maxRounds: 3, maxWalletSearches: 30, maxNameLookups: 20, maxSimilarHandles: 6, maxDeployedLookups: 12,
 };
 
 export interface EngineDeps {
@@ -114,6 +118,8 @@ export interface RunSummary {
  *  4. expand each attributed address into its wallet and analyse where the money went;
  *  5. search the wallet's hidden addresses back on the web — accounts that published them are the same
  *     person's, although nothing on the web connects them — read those accounts, and repeat from 3;
+ *     contracts work the same way in both directions: a contract the person shows leads to the address that
+ *     created it, and an address leads to the contracts it created and to whoever shows them;
  *  6. match publicly stated amounts to transfers, score once more, and estimate the value in złoty.
  */
 export async function runAnalysis(deps: EngineDeps, caseId: string, overrides: Partial<RunParams> = {}, trigger = 'manual'): Promise<RunSummary> {
@@ -198,7 +204,12 @@ export async function beginRun(
   const reversed = new Set<string>();
   const NAME = /(?<![\w.@-])((?:[a-z0-9][a-z0-9-]*\.)+eth)(?![\w-])/gi;
 
-  type Origin = 'seed' | 'discovered' | 'variant' | 'wallet' | 'name';
+  const deployments = new Map<string, Deployment>(); // by contract
+  const creatorsAsked = new Set<string>();
+  const deployedAsked = new Set<string>();
+  const shownDeployers = new Set<string>();
+
+  type Origin = 'seed' | 'discovered' | 'variant' | 'similar' | 'wallet' | 'name';
   const enqueue = async (id: Identifier, depth: number, origin: Origin, documentId?: string) => {
     const key = identifierKey(id);
     if (seen.has(key) || depth > params.maxDepth || seen.size >= params.maxIdentifiers) return;
@@ -388,6 +399,21 @@ export async function beginRun(
       const info = await lookup(m.chain as Chain, m.address);
       if (info) await emit({ type: 'account', chain: m.chain, address: m.address, kind: info.kind, labels: info.labels, txCount: info.txCount });
     }
+    // A contract the subject shows as their own: the explorer knows which address created it.
+    for (const address of ownAddresses) {
+      const chain = extractAddresses(address)[0]?.chain as Chain | undefined;
+      if (!chain || creatorsAsked.has(address) || known.get(`${chain}:${address}`)?.kind !== 'contract' || labelsOf(chain)(address).length) continue;
+      creatorsAsked.add(address);
+      const connector = chainConnectors.find((c) => c.supports(chain));
+      if (!connector?.getCreator) continue;
+      const dep = await connector.getCreator(chain, address, ctxFor(connector.id)).catch(() => undefined);
+      if (!dep || !(await noteDeployment(dep))) continue;
+      ownAddresses.add(dep.creator);
+      // Who else on the web shows the creating address?
+      await enqueue(makeIdentifier('crypto_address', dep.creator), 1, 'wallet');
+    }
+    await showDeployers();
+
     // The name an address claimed for itself, and what its owner wrote on it: leads that start on the chain.
     const names = deps.names;
     if (!names) return;
@@ -407,6 +433,50 @@ export async function beginRun(
       }
     }
   };
+  const noteDeployment = async (dep: Deployment): Promise<boolean> => {
+    if (deployments.has(dep.contract)) return false;
+    deployments.set(dep.contract, dep);
+    await store.saveDeployment(run.id, dep);
+    await emit({ type: 'deployment', chain: dep.chain, contract: dep.contract, creator: dep.creator, txHash: dep.txHash, at: dep.at });
+    return true;
+  };
+  /** Puts the creating address on the record wherever its contract is shown, and asks the explorer what it is. */
+  const showDeployers = async () => {
+    if (!deployments.size) return;
+    for (const m of await store.mentions(run.id)) {
+      const dep = deployments.get(m.address);
+      const key = `${m.document_id}|${dep?.creator}`;
+      if (!dep || m.segment_kind === 'quote' || !m.author_handle || shownDeployers.has(key)) continue;
+      shownDeployers.add(key);
+      await emit({
+        type: 'address', documentId: m.document_id, chain: dep.chain, address: dep.creator, addressType: extractAddresses(dep.creator)[0]?.addressType ?? 'evm',
+        segmentKind: m.segment_kind as 'readme', method: 'deployer', obfuscation: [],
+      });
+      const first = !known.has(`${dep.chain}:${dep.creator}`);
+      const info = await lookup(dep.chain, dep.creator);
+      if (info && first) await emit({ type: 'account', chain: dep.chain, address: dep.creator, kind: info.kind, labels: info.labels, txCount: info.txCount });
+    }
+  };
+  /** Contracts an address created are searched on the web: whoever shows one as their own project is tied to the address. */
+  const deployedBy = async (chain: Chain, address: string) => {
+    const key = `${chain}:${address}`;
+    if (deployedAsked.has(key) || deployedAsked.size >= params.maxDeployedLookups) return;
+    deployedAsked.add(key);
+    const connector = chainConnectors.find((c) => c.supports(chain));
+    if (!connector?.getDeployed) return;
+    let list: Deployment[] = [];
+    try {
+      list = await connector.getDeployed(chain, address, ctxFor(connector.id));
+    } catch (err) {
+      log(`[${connector.id}] ${address}: ${err instanceof Error ? err.message : err}`);
+    }
+    for (const dep of list.slice(0, 10)) {
+      if (!(await noteDeployment(dep))) continue;
+      await emit({ type: 'trail', chain, root: address, address: dep.contract, rule: 'K3' });
+      await enqueue(makeIdentifier('crypto_address', dep.contract), 1, 'wallet');
+    }
+  };
+
   /** Reads sources and looks addresses up until neither produces anything new. */
   const settle = async () => {
     for (let i = 0; i < 4; i++) {
@@ -567,8 +637,12 @@ export async function beginRun(
    * blockchain itself, even if nothing on the web connects them to the person; such accounts are then read in full.
    * Returns true when this brought in anything new.
    */
-  const closeLoop = async (): Promise<boolean> => {
+  const closeLoop = async (a: Assessment): Promise<boolean> => {
     const before = documentsCaptured;
+    const firm = new Set(firmClusters(a).map((c) => c.id));
+    for (const l of a.links) {
+      if (l.status === 'attributed' && firm.has(l.clusterId) && l.account?.kind !== 'contract') await deployedBy(l.chain as Chain, l.address);
+    }
     for (const w of wallets.values()) {
       for (const m of w.wallet.slice(1)) {
         if (searchedMembers.has(m.address) || searchedMembers.size >= params.maxWalletSearches) continue;
@@ -697,6 +771,34 @@ export async function beginRun(
       for (const seed of seeds) {
         if (seed.kind === 'username') for (const v of usernameVariants(seed.value)) await enqueue(makeIdentifier('username', v), 0, 'variant');
       }
+      // The same nick with something added ("szklanedomy-labs") is a common second account — and a common impostor.
+      // Such accounts are read as candidates; only a hard identifier can make them the person's.
+      for (const seed of seeds) {
+        if (seed.kind !== 'username') continue;
+        let found = 0;
+        for (const connector of connectors) {
+          if (!connector.enumerate) continue;
+          for (const spelling of [seed.value, ...usernameVariants(seed.value)]) {
+            let handles: string[] = [];
+            try {
+              handles = await connector.enumerate(makeIdentifier('username', spelling), ctxFor(connector.id));
+            } catch (err) {
+              log(`[${connector.id}] ${err instanceof Error ? err.message : err}`);
+            }
+            for (const handle of handles) {
+              const id = makeIdentifier('username', handle);
+              if (found >= params.maxSimilarHandles || seen.has(identifierKey(id)) || !similarHandle(seed.value, handle)) continue;
+              found++;
+              await enqueue(id, 0, 'similar');
+            }
+          }
+        }
+      }
+      // An entered address may have created contracts; whoever shows one of them is a lead.
+      for (const seed of seeds) {
+        const parsed = seed.kind === 'crypto_address' ? extractAddresses(seed.value)[0] : undefined;
+        if (parsed) await deployedBy(parsed.chain as Chain, parsed.address);
+      }
       await settle();
       let assessment = await score();
       await announce(assessment);
@@ -704,7 +806,7 @@ export async function beginRun(
       // Web → chain → web, until the chain reveals nothing new.
       for (let round = 0; round < params.maxRounds; round++) {
         await analyseWallets(assessment);
-        if (!(await closeLoop())) break;
+        if (!(await closeLoop(assessment))) break;
         assessment = await score();
         await announce(assessment);
       }

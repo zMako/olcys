@@ -31,12 +31,12 @@ export const CATEGORY: Record<string, string> = {
 export const CERTAINTY: Record<string, string> = { probable: 'zbycie prawdopodobne', possible: 'zbycie możliwe' };
 export const LEVEL: Record<string, string> = {
   entered: 'Osoba, o którą pytano', publisher: 'Konto, które podało ten adres', handle_variant: 'Konto o podobnym nicku',
-  name_unique: 'Możliwe, że ta sama osoba', name_ambiguous: 'Inna osoba o tym samym nazwisku?',
+  name_unique: 'Możliwe, że ta sama osoba', handle_similar: 'Podobny nick, nic go nie potwierdza', name_ambiguous: 'Inna osoba o tym samym nazwisku?',
 };
 /** Short captions for the outlines around accounts in the graph. */
 export const GROUP: Record<string, string> = {
   entered: 'Osoba, o którą pytano', publisher: 'Konto, które podało ten adres', handle_variant: 'Podobny nick',
-  name_unique: 'Tylko zbieżność nazwiska', name_ambiguous: 'Tylko zbieżność nazwiska',
+  name_unique: 'Tylko zbieżność nazwiska', handle_similar: 'Tylko podobny nick', name_ambiguous: 'Tylko zbieżność nazwiska',
 };
 export const OBFUSCATION: Record<string, string> = {
   split: 'pocięty na fragmenty', 'zero-width': 'przedzielony niewidocznymi znakami', homoglyph: 'zapisany literami z innego alfabetu', 'compat-form': 'zapisany nietypowymi znakami',
@@ -65,8 +65,9 @@ export function describe(e: StoredRunEvent): string {
     case 'lead':
       if (e.origin === 'seed') return `Wprowadzono: ${KIND[e.kind] ?? e.kind} „${e.value}”.`;
       if (e.origin === 'variant') return `Sprawdzam też inny zapis nicku: „${e.value}”.`;
+      if (e.origin === 'similar') return `Jest też konto o nicku „${e.value}”, który zawiera wprowadzony nick. Sprawdzam, czy coś je potwierdza.`;
       if (e.origin === 'name') return `Trop z nazwy adresu: ${KIND[e.kind] ?? e.kind} „${e.value}”.`;
-      if (e.origin === 'wallet') return e.kind === 'crypto_address' ? `Szukam w sieci adresu z portfela: ${shortAddress(e.value)}.` : 'Konto powiązane przez portfel: czytam je w całości.';
+      if (e.origin === 'wallet') return e.kind === 'crypto_address' ? `Szukam w sieci adresu, na który wskazał łańcuch bloków: ${shortAddress(e.value)}.` : 'Konto powiązane przez portfel: czytam je w całości.';
       return e.kind === 'crypto_address' ? `Nowy trop: kto jeszcze podaje adres ${shortAddress(e.value)}?` : `Nowy trop: ${KIND[e.kind] ?? e.kind} „${e.value}”.`;
     case 'search':
       return `${sourceName(e.source)}: szukam „${e.kind === 'crypto_address' ? shortAddress(e.value) : e.value}”.`;
@@ -74,7 +75,10 @@ export function describe(e: StoredRunEvent): string {
       return `${sourceName(e.source)}: ${DOC[e.docType] ?? e.docType}${e.handle ? ` użytkownika ${e.handle}` : ''}${e.relation === 'mention' ? ' (obce konto)' : ''}.`;
     case 'hit':
       return `Trop „${e.via.value}” prowadzi do znanego już dokumentu.`;
+    case 'deployment':
+      return `Kontrakt ${shortAddress(e.contract)} utworzono z adresu ${shortAddress(e.creator)}. Tego adresu osoba nigdzie nie podała.`;
     case 'address':
+      if (e.method === 'deployer') return `Adres ${shortAddress(e.address)} utworzył kontrakt, który to konto podaje jako własny.`;
       if (e.method === 'ens') return `Nazwa ${e.name ?? ''} wskazuje adres ${CHAIN[e.chain] ?? e.chain} ${shortAddress(e.address)}.`;
       if (e.method === 'qr') return `Wykryto adres ${CHAIN[e.chain] ?? e.chain} ${shortAddress(e.address)} — odczytany z kodu QR na zdjęciu.`;
       return `Wykryto adres ${CHAIN[e.chain] ?? e.chain} ${shortAddress(e.address)}${e.method !== 'plain' ? ` — był ${e.obfuscation.map((o) => OBFUSCATION[o] ?? o).join(', ')}` : ''}${e.segmentKind === 'quote' ? ' (w cytacie)' : e.segmentKind === 'archived' ? ' (w archiwalnej wersji profilu)' : ''}.`;
@@ -94,6 +98,7 @@ export function describe(e: StoredRunEvent): string {
     case 'ranked':
       return 'Adresy uporządkowane według pewności.';
     case 'trail':
+      if (e.rule === 'K3') return `Z adresu ${shortAddress(e.root)} utworzono kontrakt ${shortAddress(e.address)}. Kto w sieci podaje go jako własny?`;
       return `Z łańcucha bloków z powrotem do sieci: kto podał ukryty adres portfela ${shortAddress(e.address)}?`;
     case 'match':
       return e.detail;

@@ -23,6 +23,8 @@ const Env = z.object({
   GITHUB_TOKEN: z.string().optional(),
   BITCOIN_API_URL: z.string().url().default('https://mempool.space/api'),
   ETH_RPC_URL: z.string().url().default('https://ethereum-rpc.publicnode.com'),
+  /** Optional indexer with a Blockscout-style API: tells which address created a contract. */
+  ETH_INDEXER_URL: z.string().url().optional(),
   LIVE_NBP_API_URL: z.string().url().default('https://api.nbp.pl'),
   EGRESS_ALLOWLIST: z.string().default(''),
   API_PORT: z.coerce.number().default(4000),
@@ -73,7 +75,7 @@ export async function loadRuntime(env: NodeJS.ProcessEnv = process.env): Promise
   // The public internet: GitHub, a Bitcoin explorer, an Ethereum node with ENS, NBP, the Wayback Machine.
   const live = withAllowlist({
     connectors: [createGithubConnector({ token: cfg.GITHUB_TOKEN })],
-    chain: [createEsploraConnector(cfg.BITCOIN_API_URL), createEvmRpcConnector(cfg.ETH_RPC_URL)],
+    chain: [createEsploraConnector(cfg.BITCOIN_API_URL), createEvmRpcConnector(cfg.ETH_RPC_URL, { indexer: cfg.ETH_INDEXER_URL })],
     rates: createNbpConnector(cfg.LIVE_NBP_API_URL),
     prices: createCoinbasePriceConnector(),
     archive: createWaybackConnector(),

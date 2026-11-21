@@ -33,3 +33,12 @@ export function makeWallet(seed: string, kind: WalletKind, label: string): Walle
   if (kind === 'eth') return { kind, chain: 'ethereum', address: toEip55(bytesToHex(account)), privateKeyHex, label };
   return { kind, chain: 'tron', address: encodeBase58Check(0x41, account), privateKeyHex, label };
 }
+
+/** A deterministic SSH public key line ("ssh-ed25519 AAAA… comment"), as code hosts list them at /<user>.keys. */
+export function sshKey(seed: string, comment: string): string {
+  const name = utf8ToBytes('ssh-ed25519');
+  const key = sha256(utf8ToBytes(`olcys-ssh|${seed}`));
+  const u32 = (n: number) => new Uint8Array([0, 0, 0, n]);
+  const blob = new Uint8Array([...u32(name.length), ...name, ...u32(key.length), ...key]);
+  return `ssh-ed25519 ${Buffer.from(blob).toString('base64')} ${comment}`;
+}

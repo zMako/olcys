@@ -1,3 +1,4 @@
+import type { Fingerprint } from './fingerprints';
 import type { Identifier } from './identifiers';
 
 /** A piece of a document. The kind tells later rules where exactly an address stood. */
@@ -51,6 +52,8 @@ export interface SourceItem {
   images?: { url: string }[];
   /** New leads found on the item. The engine follows them only from the subject's own content. */
   discovered: Identifier[];
+  /** Hashes and key fingerprints the profile shows (avatar e-mail hash, public keys). They identify the owner without naming them. */
+  fingerprints?: Fingerprint[];
 }
 
 /** Extras for a request. Headers are sent but never stored, so access tokens do not end up in the evidence vault. */
@@ -87,6 +90,11 @@ export interface SourceConnector {
   descriptor: ConnectorDescriptor;
   supports(identifier: Identifier): boolean;
   search(identifier: Identifier, ctx: ConnectorContext): AsyncGenerator<SourceItem>;
+  /**
+   * Nicks on this source that contain the given nick without being it ("szklanedomy" → "szklanedomy-labs").
+   * They are candidates only: the engine reads them, and identity rules decide whether anything confirms them.
+   */
+  enumerate?(identifier: Identifier, ctx: ConnectorContext): Promise<string[]>;
 }
 
 /** A stored past version of a page in a web archive. */

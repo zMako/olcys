@@ -2,7 +2,7 @@
 
 Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, imię i nazwisko, e-mail, telefon, adres krypto) samo przeszukuje publiczne źródła, znajduje powiązane adresy kryptowalutowe i zapisuje każdy ślad razem ze źródłem.
 
-> Stan: **etap 5 z 7, pogłębione wyszukiwanie, źródła rzeczywiste oraz analizy cykliczne z porównaniem wyników**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków, dopasowuje kwoty do przelewów, czyta nazwy adresów (ENS) i rozpoznaje tego samego klienta giełdy. Sprawę można analizować ponownie na żądanie albo według harmonogramu; każda kolejna analiza mówi, co się zmieniło od poprzedniej. Obok środowiska testowego są konektory do źródeł rzeczywistych: GitHub, eksplorator Bitcoin, węzeł Ethereum z ENS, NBP, Wayback Machine.
+> Stan: **etap 5 z 7, pogłębione wyszukiwanie, źródła rzeczywiste, analizy cykliczne z porównaniem wyników**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków. Oprócz adresów podanych wprost znajduje konta o podobnym nicku i potwierdza je skrótem e-maila w awatarze albo kluczem publicznym, dochodzi od kontraktu do adresu, który go utworzył, i porównuje rytm doby osoby z godzinami przelewów. Sprawę można analizować ponownie według harmonogramu; każda kolejna analiza mówi, co się zmieniło.
 
 ![Graf powiązań z szacunkiem w złotych](docs/screenshots/graf-wynik.png)
 
@@ -13,6 +13,10 @@ Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, i
 | Podmiana adresu na profilu w czasie | Szacunek i jego wyliczenie |
 |---|---|
 | ![Profil w czasie](docs/screenshots/profil-w-czasie.png) | ![Szacunek w złotych](docs/screenshots/szacunek.png) |
+
+| Adres, którego osoba nigdzie nie podała: twórca jej kontraktu | Rytm doby i konta o podobnym nicku |
+|---|---|
+| ![Twórca kontraktu](docs/screenshots/tworca-kontraktu.png) | ![Rytm doby](docs/screenshots/rytm-doby.png) |
 
 | Co się zmieniło od poprzedniej analizy |
 |---|
@@ -34,7 +38,7 @@ Wymagany Node.js 20.19 lub nowszy.
 
 ```bash
 npm install
-npm test                          # 108 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
+npm test                          # 126 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
 npm run world                     # terminal 1: środowisko syntetyczne (porty 4101–4106)
 npm run analyze -- szklane_domy   # terminal 2: analiza od jednego nicku, wynik w konsoli
 npm run api                       # terminal 2: API HTTP na porcie 4000
@@ -62,7 +66,7 @@ Jeden ekran, jedna historia. Po wpisaniu identyfikatora graf rośnie krok po kro
 
 1. **Szuka śladów.** Sprawdza identyfikator we wszystkich źródłach i idzie za tropami z własnych treści osoby (linki do profili, e-mail, telefon, imię i nazwisko).
 2. **Wykrywa adresy.** Bitcoin, Ethereum i Tron; każdy kandydat musi przejść sumę kontrolną. Rozpoznaje też adresy ukryte: znakami niewidocznymi, literami z innego alfabetu, pocięte na fragmenty, obecne tylko w adresie linku.
-3. **Ustala tożsamość.** Konta łączy w jedną osobę wyłącznie na twardych przesłankach (odnośnik między profilami, ten sam e-mail lub telefon, ten sam adres na własnych profilach, ten sam wprowadzony nick). Samo imię i nazwisko nigdy nie łączy kont.
+3. **Ustala tożsamość.** Konta łączy w jedną osobę wyłącznie na twardych przesłankach (odnośnik między profilami, ten sam e-mail lub telefon, ten sam adres na własnych profilach, ten sam wprowadzony nick, skrót e-maila w adresie awatara, ten sam klucz publiczny, wspólny portfel lub kontrakt w łańcuchu bloków). Samo imię i nazwisko nigdy nie łączy kont.
 4. **Liczy Wskaźnik Pewności.** Reguły są danymi (`packages/scoring/src/ruleset.ts`) i są zapisywane z każdym wynikiem, więc wynik da się odtworzyć i przeliczyć po zmianie reguł.
 5. **Odrzuca błędne przypisania.** Etykiety podmiotów (lista wbudowana i etykiety eksploratora), kod kontraktu, adresy publikowane przez wiele obcych kont, cytaty.
 6. **Analizuje łańcuch bloków.** Wolumen, okres aktywności i wzorce możliwego wyjścia do walut tradycyjnych.
@@ -73,9 +77,9 @@ W interfejsie obok pola wyszukiwania wybiera się źródła: „Środowisko test
 
 | Źródło | Co daje | Uwagi |
 |---|---|---|
-| GitHub (API) | profil, README profilu, README i plik FUNDING własnych repozytoriów; z tokenem także wyszukiwanie adresu w kodzie | bez tokenu 60 zapytań na godzinę na adres IP — ustaw `GITHUB_TOKEN` |
+| GitHub (API) | profil, README profilu, README i plik FUNDING własnych repozytoriów, klucze publiczne SSH konta, loginy zawierające szukany nick; z tokenem także wyszukiwanie adresu w kodzie | bez tokenu 60 zapytań na godzinę na adres IP — ustaw `GITHUB_TOKEN` |
 | Eksplorator Bitcoin (format Esplora) | saldo, historia, adresy finansujące tę samą transakcję (rozszerzenie portfela) | `BITCOIN_API_URL`; może wskazywać własny eksplorator |
-| Węzeł Ethereum (JSON-RPC) | czy adres ma kod (kontrakt, delegacja, zwykłe konto), liczba transakcji, saldo | `ETH_RPC_URL`; historia przelewów wymaga indeksera |
+| Węzeł Ethereum (JSON-RPC) | czy adres ma kod (kontrakt, delegacja, zwykłe konto), liczba transakcji, saldo | `ETH_RPC_URL`; historia przelewów wymaga indeksera. Z `ETH_INDEXER_URL` (API w stylu Blockscout) także adres, który utworzył kontrakt |
 | ENS | adres dla nazwy, nazwa zgłoszona przez adres, rekordy właściciela | przez ten sam węzeł |
 | NBP | kursy średnie, tabela A | `api.nbp.pl` |
 | Wayback Machine | dawne wersje profili | `web.archive.org` |
@@ -108,6 +112,34 @@ Adres z tego samego portfela co adres o wyższym wyniku dostaje jego wynik, najw
 - **Inny zapis nicku.** Sprawdzane są też warianty nicku różniące się separatorami (`szklane_domy` → `szklanedomy`). Konto znalezione tylko w ten sposób, bez innego powiązania, ma wynik ograniczony do 79%.
 - **Co może podważyć wynik.** Przy każdym adresie narzędzie samo wypisuje najmocniejsze zastrzeżenia (np. „adres tylko w jednym serwisie”, „zdjęcie mogło zostać skopiowane”) i wskazuje, co by je rozstrzygnęło.
 
+### Konta o podobnym nicku, skrót e-maila i klucze publiczne
+
+Ludzie zakładają drugie konto pod swoim nickiem z dopiskiem (`szklanedomy-labs`). To samo robią podszywający się. Dlatego narzędzie traktuje taki nick wyłącznie jako kandydata.
+
+1. **Wyliczenie kandydatów.** Wyszukiwarka każdego serwisu jest pytana o nick i jego warianty; konta, których nick zawiera szukany, są czytane w całości. Bez potwierdzenia ich adresy mają wynik ograniczony do 49% i nie wchodzą do szacunku.
+2. **Skrót e-maila w adresie awatara (J8).** Serwisy awatarów adresują obrazek skrótem adresu e-mail właściciela. Konto, które nie pokazuje e-maila, i tak zdradza jego skrót. Jeśli jest to skrót e-maila podanego przez inne konto osoby albo wprowadzonego przez analityka, konta należą do jednej osoby.
+3. **Ten sam klucz publiczny (J9).** Serwisy z kodem udostępniają klucze SSH kont (`/<login>.keys`). Ten sam klucz na dwóch kontach oznacza tego samego właściciela. Klucz obecny na więcej niż trzech kontach jest pomijany (klucz wdrożeniowy, wspólna maszyna).
+
+W scenariuszu testowym dwa konta mają nick z dopiskiem. `szklanedomy-labs` nie podaje żadnych danych, ale potwierdzają je skrót e-maila i klucz — trafia do osoby. `szklanedomy-krk` ma inny skrót i inny klucz — zostaje osobno, z limitem 49% i z opisem tego, co sprawdzono.
+
+### Od kontraktu do adresu, który go utworzył
+
+Smart kontrakt nie jest portfelem i jest wykluczany (X2). Jeśli jednak osoba podaje kontrakt jako własny projekt, eksplorator wie, z jakiego adresu go utworzono.
+
+- **W stronę łańcucha (K3).** Adres twórcy trafia na listę adresów osoby, choć nigdzie go nie podała. Wynik jest ograniczony do 70%, bo kontrakt mógł wdrożyć współpracownik. Adres jest dalej analizowany jak każdy inny: portfel, usługi wyjścia, szacunek.
+- **W stronę sieci (J10).** Dla adresów osoby (i dla adresu wprowadzonego przez analityka) pobierana jest lista kontraktów, które utworzyły. Kontrakty są wyszukiwane w sieci; konto, które podaje taki kontrakt we własnym repozytorium, jest powiązane z adresem.
+
+W scenariuszu testowym repozytorium `szklanedomy-labs/skarbonka` podaje kontrakt. Jego twórca wysłał 3,1 ETH do usługi wymiany P2P — bez tego sygnału ta kwota nie znalazłaby się w szacunku.
+
+### Rytm doby
+
+Każdy ma godziny, w których nie jest aktywny. Narzędzie wyznacza je z dat wpisów, ogłoszeń i zmian w repozytoriach osoby (7 kolejnych godzin o najmniejszej aktywności, czas polski; potrzeba co najmniej 10 datowanych pozycji) i porównuje z godzinami przelewów wychodzących.
+
+- **Adres o innym rytmie (R2).** Jeśli z adresu wyszło co najmniej 5 przelewów i co najmniej połowa w godzinach, w których osoba nie jest aktywna, wynik spada o 10 pkt proc., a zastrzeżenie trafia na początek listy. Tak wychodzi na jaw adres, który osoba tylko podała w rozmowie, a który należy do kogoś innego.
+- **Rytm osoby.** Dla pozostałych adresów liczone jest prawdopodobieństwo, że ktoś o niezwiązanym rytmie wysłałby tak mało przelewów w tych godzinach (rozkład dwumianowy). Zgodność **nie dodaje punktów**: podobny rytm ma wiele osób w tej samej strefie czasowej. Służy jako kontrola, a nie jako dowód.
+
+W scenariuszu testowym osoba nie publikuje między 00:00 a 07:00 i żaden z 19 przelewów z jej adresów nie przypada na te godziny. Adres kolegi z zagranicy, który podała we wpisie, ma 7 z 7 przelewów w środku polskiej nocy: 45% → 35%.
+
 ### Wskaźnik Pewności
 
 | Reguła | Przesłanka | Wartość |
@@ -121,9 +153,11 @@ Adres z tego samego portfela co adres o wyższym wyniku dostaje jego wynik, najw
 | W2 | Adres z tego samego portfela co adres o wyższym wyniku | wynik tamtego adresu, najwyżej 90% |
 | A1 | Wpłata zgodna z publicznie podaną kwotą | +10 pkt proc. za każdą, najwyżej +20 |
 | N1 | Nazwa adresu wskazuje konto, które podaje ten adres | co najmniej 95% |
+| K3 | Adres nie został podany, ale utworzył kontrakt, który osoba podaje jako własny | najwyżej 70%; +10 pkt proc., jeśli adres jest też podany wprost |
+| R2 | Przelewy z adresu wychodzą w godzinach, w których osoba nie jest aktywna | −10 pkt proc. |
 | C1 | Podpisana wiadomość wymieniająca konto | 100% |
 | C2 | Podpisana wiadomość bez wskazania konta | +30 pkt proc., najwyżej 95% |
-| T1 | Limit pewności tożsamości: podobny nick albo tylko nazwisko | najwyżej 79%, 59% lub 39% |
+| T1 | Limit pewności tożsamości: inny zapis nicku, tylko nazwisko, nick z dopiskiem | najwyżej 79%, 59%, 49% lub 39% |
 | X1 | Adres oznaczonego podmiotu (giełda, token, mikser, zbiórka…) | 0% |
 | X2 | Smart kontrakt (kod wykonywalny) | 0% |
 | X3 | Adres publikowany przez 3 lub więcej niepowiązanych kont | 0% |

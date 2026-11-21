@@ -1,6 +1,6 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
-import { classifyCode, toEip55, type AccountInfo, type ChainConnector, type ConnectorContext, type NameRecord, type NameService, type Transfer } from '@olcys/core';
+import { classifyCode, parseAddress, toEip55, type AccountInfo, type Chain, type ChainConnector, type ConnectorContext, type Deployment, type NameRecord, type NameService, type Transfer } from '@olcys/core';
 
 interface RpcResult {
   result?: string;
@@ -23,10 +23,12 @@ async function rpc(ctx: ConnectorContext, url: string, calls: { method: string; 
  * account), how many transactions it sent, and its balance. Works with any node, including one run in-house.
  * A node does not index transfers, so the history of an address needs an indexer on top.
  */
-export function createEvmRpcConnector(rpcUrl: string): ChainConnector {
+export function createEvmRpcConnector(rpcUrl: string, opts: { indexer?: string } = {}): ChainConnector {
+  // A node cannot say who created a contract; an indexer with a Blockscout-style API can.
+  const indexer = opts.indexer?.replace(/\/+$/, '');
   return {
     id: 'evm-rpc',
-    descriptor: { name: `Węzeł Ethereum (${new URL(rpcUrl).host})`, chains: ['ethereum'], hosts: [new URL(rpcUrl).host], synthetic: false },
+    descriptor: { name: `Węzeł Ethereum (${new URL(rpcUrl).host})`, chains: ['ethereum'], hosts: [new URL(rpcUrl).host, ...(indexer ? [new URL(indexer).host] : [])], synthetic: false },
     supports: (chain) => chain === 'ethereum',
     async getAccount(chain, address, ctx): Promise<AccountInfo> {
       const [code, nonce, balance] = await rpc(ctx, rpcUrl, [
@@ -44,6 +46,19 @@ export function createEvmRpcConnector(rpcUrl: string): ChainConnector {
     async getTransfers(): Promise<Transfer[]> {
       return [];
     },
+    ...(indexer
+      ? {
+          async getCreator(chain: Chain, contract: string, ctx: ConnectorContext): Promise<Deployment | undefined> {
+            const url = `${indexer}/api/v2/addresses/${contract}`;
+            const res = await ctx.fetch(url);
+            if (res.status !== 200) return undefined;
+            const a = JSON.parse(res.body) as { creator_address_hash?: string | null; creation_transaction_hash?: string | null; creation_tx_hash?: string | null };
+            const creator = a.creator_address_hash ? parseAddress(a.creator_address_hash) : null;
+            if (!creator) return undefined;
+            return { chain, contract, creator: creator.address, txHash: a.creation_transaction_hash ?? a.creation_tx_hash ?? undefined, sourceUrl: url, snapshotId: res.snapshotId };
+          },
+        }
+      : {}),
   };
 }
 

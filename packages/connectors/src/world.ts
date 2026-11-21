@@ -1,6 +1,6 @@
 import {
-  extractAddresses, makeIdentifier, normalizeIdentifier,
-  type ConnectorContext, type Identifier, type Relation, type Segment, type SourceConnector, type SourceItem,
+  avatarFingerprint, extractAddresses, makeIdentifier, normalizeIdentifier, sshKeyFingerprint,
+  type ConnectorContext, type Fingerprint, type Identifier, type Relation, type Segment, type SourceConnector, type SourceItem,
 } from '@olcys/core';
 import { linkSegments, parseHtml, textOf } from './html';
 
@@ -14,6 +14,15 @@ const hostOf = (base: string) => new URL(base).host;
 const search = (base: string, q: string) => `${base}/szukaj?q=${encodeURIComponent(q)}`;
 const sameUser = (a: string, b: string) => normalizeIdentifier('username', a) === normalizeIdentifier('username', b);
 const sameName = (a: string, b: string) => normalizeIdentifier('full_name', a) === normalizeIdentifier('full_name', b);
+
+/** Nicks the site's own search returns for a nick, other than that nick itself. */
+async function otherHandles(ctx: ConnectorContext, base: string, id: Identifier, selector: string): Promise<string[]> {
+  if (id.kind !== 'username') return [];
+  const res = await ctx.fetch(search(base, id.value));
+  if (res.status !== 200) return [];
+  const $ = parseHtml(res.body);
+  return [...new Set($(selector).toArray().map((a) => $(a).text().trim()))].filter((h) => h && !sameUser(h, id.value));
+}
 
 /** Path of a profile URL if it belongs to this site, e.g. "/uzytkownik/abc" → ["uzytkownik", "abc"]. */
 function pathOn(base: string, id: Identifier): string[] | null {
@@ -138,6 +147,7 @@ export function createForumConnector(base: string): SourceConnector {
       });
       for (const [threadId, ids] of byThread) yield* threadPosts(ctx, threadId, ids, 'mention');
     },
+    enumerate: (id, ctx) => otherHandles(ctx, base, id, 'li.result-user a'),
   };
 }
 
@@ -185,6 +195,19 @@ export function createCodeConnector(base: string): SourceConnector {
       const href = $(a).attr('href');
       if (href) discovered.push(makeIdentifier('profile_url', href));
     });
+    // What the profile gives away without saying it: the e-mail hash in the avatar address, and the public keys.
+    const fingerprints: Fingerprint[] = [];
+    const avatar = avatarFingerprint($('.profile img.avatar').attr('src'));
+    if (avatar) fingerprints.push({ ...avatar, sourceUrl: url });
+    if (relation !== 'mention') {
+      const keys = await ctx.fetch(`${url}.keys`);
+      if (keys.status === 200) {
+        for (const line of keys.body.split('\n')) {
+          const value = sshKeyFingerprint(line);
+          if (value) fingerprints.push({ kind: 'ssh_key', value, sourceUrl: `${url}.keys` });
+        }
+      }
+    }
     yield {
       snapshotId: res.snapshotId,
       url,
@@ -196,6 +219,7 @@ export function createCodeConnector(base: string): SourceConnector {
       relation,
       segments,
       discovered,
+      fingerprints,
     };
     if (relation === 'mention') return;
     for (const a of $('ul.repos a').toArray()) yield* repo(ctx, $(a).attr('href')!, 'author');
@@ -225,6 +249,7 @@ export function createCodeConnector(base: string): SourceConnector {
       if (id.kind !== 'crypto_address') return;
       for (const a of $('li.result-repo a').toArray()) yield* repo(ctx, $(a).attr('href')!, 'mention');
     },
+    enumerate: (id, ctx) => otherHandles(ctx, base, id, 'li.result-user a'),
   };
 }
 
@@ -303,6 +328,7 @@ export function createAdsConnector(base: string): SourceConnector {
       if (id.kind !== 'crypto_address') return;
       for (const a of $('li.result-ad a').toArray()) yield* ad(ctx, $(a).attr('href')!, 'mention');
     },
+    enumerate: (id, ctx) => otherHandles(ctx, base, id, 'li.result-seller a'),
   };
 }
 

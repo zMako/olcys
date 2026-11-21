@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { AddressActivity, RunDiff, RunSummary, StoredRunEvent } from '@olcys/engine';
-import { draftRequest, type Link, type OffRamp, type ProfileHistory } from '@olcys/scoring';
+import { draftRequest, type Link, type OffRamp, type ProfileHistory, type Rhythm } from '@olcys/scoring';
 import { BAND_COLOR } from './graph/Graph';
 import { addressId, type GNode, type Graph } from './graph/model';
 import { ACCOUNT_KIND, BAND, CATEGORY, CERTAINTY, CHAIN, KIND, LEVEL, OBFUSCATION, PLACEMENT, amounts, day, describe, minute, moreAddresses, pln, shortAddress } from './pl';
@@ -202,7 +202,9 @@ function AddressPanel({ node, summary }: { node: GNode; summary?: RunSummary }) 
                 </div>
               ) : (
                 <>
-                  {o.method !== 'plain' && <div className="note">Adres był {o.obfuscation.map((x) => OBFUSCATION[x] ?? x).join(', ')}.</div>}
+                  {o.method === 'deployer' && <div className="note">Tego adresu nie ma w treści. Ustalono go z łańcucha bloków: utworzył kontrakt podany w tym miejscu.</div>}
+                  {o.method === 'ens' && <div className="note">W treści jest nazwa, nie adres. Nazwa wskazuje ten adres w łańcuchu bloków.</div>}
+                  {o.obfuscation.length > 0 && <div className="note">Adres był {o.obfuscation.map((x) => OBFUSCATION[x] ?? x).join(', ')}.</div>}
                   <Context text={o.context} raw={o.raw} />
                 </>
               )}
@@ -461,7 +463,42 @@ function EstimatePanel({ summary }: { summary?: RunSummary }) {
   );
 }
 
+/** When the person publishes and when transfers leave their addresses, hour by hour. The shaded hours are the ones they are never active in. */
+function RhythmStrip({ rhythm }: { rhythm: Rhythm }) {
+  const q = rhythm.quiet;
+  const quiet = (h: number) => !!q && (h - q.from + 24) % 24 < q.hours;
+  const rows: { label: string; hours: number[]; off?: boolean }[] = [
+    { label: `Wpisy i ogłoszenia w sieci (${rhythm.webCount})`, hours: rhythm.web },
+    { label: `Przelewy wychodzące z adresów osoby (${rhythm.chainCount})`, hours: rhythm.chain },
+    ...rhythm.conflicting.filter((c) => c.hours).map((c) => ({ label: `Przelewy z adresu ${shortAddress(c.address)} (${c.transfers})`, hours: c.hours!, off: true })),
+  ];
+  const max = Math.max(1, ...rows.flatMap((r) => r.hours));
+  return (
+    <div className="rhythm" role="img" aria-label={rhythm.note}>
+      {rows.map((r) => (
+        <div key={r.label}>
+          <div className="rhythm-label">{r.label}</div>
+          <div className={`rhythm-row${r.off ? ' off' : ''}`}>
+            {r.hours.map((n, h) => (
+              <span key={h} className={quiet(h) ? 'quiet-hour' : ''} title={`${String(h).padStart(2, '0')}:00–${String((h + 1) % 24).padStart(2, '0')}:00: ${n}`}>
+                {n > 0 && <i style={{ height: `${Math.max(12, (n / max) * 100)}%` }} />}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="rhythm-axis">
+        {Array.from({ length: 24 }, (_, h) => (
+          <span key={h}>{h % 6 === 0 ? String(h).padStart(2, '0') : ''}</span>
+        ))}
+      </div>
+      {q && <div className="rhythm-key"><span className="swatch" /> godziny, w których osoba nie publikuje (czas polski)</div>}
+    </div>
+  );
+}
+
 function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseInfo, actions }: { graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions }) {
+  const rhythm = summary?.assessment?.clusters.find((c) => c.rhythm && (c.level === 'entered' || c.level === 'publisher'))?.rhythm;
   if (!events.length) {
     return (
       <>
@@ -572,6 +609,49 @@ function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseI
               Konto <strong>{n.title}</strong> ({n.sub}) nie jest w sieci z niczym powiązane. Znaleziono je, ponieważ podaje adres, który łańcuch bloków wiąże z adresem osoby.{' '}
               <button className="linklike" onClick={() => onSelect(n.id)}>
                 Pokaż konto
+              </button>
+            </p>
+          ))}
+        </Section>
+      )}
+
+      {graph.finished && summary && graph.nodes.some((n) => n.viaSimilar) && (
+        <Section title="Konta o podobnym nicku" layer="computed">
+          {graph.nodes.filter((n) => n.viaSimilar).map((n) => {
+            const cluster = summary.assessment?.clusters.find((c) => c.accounts.some((a) => a.origin === n.origin && a.handle === n.handle));
+            const firm = cluster?.level === 'entered' || cluster?.level === 'publisher';
+            const why = (cluster?.joins ?? []).filter((j) => ['J8', 'J9', 'J10'].includes(j.rule) && j.detail.includes(`${n.handle} (`));
+            return (
+              <div key={n.id}>
+                <p>
+                  Konto <strong>{n.title}</strong> ({n.sub}){' '}
+                  {firm ? 'ma nick, który zawiera wprowadzony nick. Samo niczego o właścicielu nie podaje, ale to konto badanej osoby:' : `nie jest potwierdzone. ${cluster?.identityNote ?? ''}`}{' '}
+                  <button className="linklike" onClick={() => onSelect(n.id)}>
+                    Pokaż konto
+                  </button>
+                </p>
+                {firm && (
+                  <ul className="changes-list">
+                    {why.map((j, i) => (
+                      <li key={i}>{j.detail.charAt(0).toUpperCase() + j.detail.slice(1)}.</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </Section>
+      )}
+
+      {graph.finished && rhythm && (rhythm.quiet || rhythm.webCount >= 5) && (
+        <Section title="Rytm doby" layer="computed">
+          <RhythmStrip rhythm={rhythm} />
+          <p>{rhythm.note}</p>
+          {rhythm.conflicting.map((c) => (
+            <p key={c.address} className="quiet">
+              Adres <span className="mono">{shortAddress(c.address)}</span>: {c.inQuiet} z {c.transfers} przelewów w godzinach, w których osoba nie jest aktywna. Wynik tego adresu obniżono.{' '}
+              <button className="linklike" onClick={() => onSelect(addressId(c.chain, c.address))}>
+                Pokaż adres
               </button>
             </p>
           ))}

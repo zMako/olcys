@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { foldDiacritics, parseAddress } from '@olcys/core';
+import { foldDiacritics, md5Hex, parseAddress } from '@olcys/core';
 import { NBP, PRICES, priceUsd } from './fixtures';
 import type { ForumUser, LedgerTx, Site, World } from './model';
 import { adPhoto } from './photo';
@@ -171,6 +171,19 @@ function forumWrite(world: World): (path: string, form: URLSearchParams) => stri
   };
 }
 
+/** A small picture drawn from a hash, the way avatar services draw a default avatar. */
+function identicon(hash: string): string {
+  const hue = parseInt(hash.slice(0, 3), 16) % 360;
+  let cells = '';
+  for (let y = 0; y < 5; y++) {
+    for (let x = 0; x < 3; x++) {
+      if (parseInt(hash[3 + y * 3 + x], 16) % 2) continue;
+      for (const cx of new Set([x, 4 - x])) cells += `<rect x="${cx * 16 + 8}" y="${y * 16 + 8}" width="16" height="16"/>`;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96"><rect width="96" height="96" fill="#eef0f2"/><g fill="hsl(${hue} 45% 42%)">${cells}</g></svg>`;
+}
+
 function codeHandler(world: World, bases: Bases): Handler {
   const { users, repos } = world.code;
   const readmeText = (u: (typeof users)[number]) => u.readme.map((l) => `${l.text} ${l.href ?? ''}`).join('\n');
@@ -190,12 +203,22 @@ ${hitUsers.map((u) => `<li class="result-user"><a href="/${esc(u.handle)}">${esc
 ${hitRepos.map((r) => `<li class="result-repo"><a href="/${esc(r.owner)}/${esc(r.name)}">${esc(r.owner)}/${esc(r.name)}</a></li>`).join('\n')}
 </ul>`);
     }
+    // Avatar pictures are addressed by the hash of the account's e-mail, as avatar services do it.
+    const av = path.match(/^\/avatar\/([0-9a-f]{32})\.svg$/);
+    if (av) return { binary: Buffer.from(identicon(av[1])), type: 'image/svg+xml' };
+    // Public SSH keys of an account, one per line.
+    const keys = path.match(/^\/([^/]+)\.keys$/);
+    if (keys) {
+      const u = users.find((x) => x.handle === decodeURIComponent(keys[1]));
+      return u ? { binary: Buffer.from((u.sshKeys ?? []).join('\n') + '\n'), type: 'text/plain; charset=utf-8' } : null;
+    }
     let m = path.match(/^\/([^/]+)$/);
     if (m) {
       const u = users.find((x) => x.handle === decodeURIComponent(m![1]));
       if (!u) return null;
       const own = repos.filter((r) => r.owner === u.handle);
       return page('code', u.handle, `<section class="profile">
+${u.avatarEmail ? `<img class="avatar" src="/avatar/${md5Hex(u.avatarEmail.trim().toLowerCase())}.svg?s=96" width="96" height="96" alt="Awatar">` : ''}
 <h1 class="handle">${esc(u.handle)}</h1>
 ${u.name ? `<p class="name">${esc(u.name)}</p>` : ''}
 <p class="bio">${esc(u.bio)}</p>
@@ -206,7 +229,8 @@ ${u.email ? `<p><a class="email" href="mailto:${esc(u.email)}">${esc(u.email)}</
 <section class="readme"><h2>README</h2>
 ${u.readme.map((l) => (l.href ? `<p><a href="${esc(l.href)}">${esc(l.text)}</a></p>` : `<p>${esc(l.text)}</p>`)).join('\n')}
 </section>
-<section><h2>Repozytoria</h2><ul class="repos">${own.map((r) => `<li><a href="/${esc(r.owner)}/${esc(r.name)}">${esc(r.name)}</a></li>`).join('')}</ul></section>`);
+<section><h2>Repozytoria</h2><ul class="repos">${own.map((r) => `<li><a href="/${esc(r.owner)}/${esc(r.name)}">${esc(r.name)}</a></li>`).join('')}</ul></section>
+${u.sshKeys?.length ? `<p class="meta">Klucze publiczne: <a href="/${esc(u.handle)}.keys">/${esc(u.handle)}.keys</a></p>` : ''}`);
     }
     m = path.match(/^\/([^/]+)\/([^/]+)$/);
     if (m) {
@@ -297,9 +321,11 @@ function explorerHandler(world: World): Handler {
       }
     }
     const e = labels.get(a);
+    const made = world.chain.deployments.find((d) => d.contract === a);
     return {
       address: a,
       chain: parsed.chain,
+      ...(made ? { creator: made.creator, creationTx: made.txHash, createdAt: made.at } : {}),
       label: e ? { name: e.name, category: e.category } : null,
       code: codes[a] ?? '0x',
       txCount: list.length,
@@ -327,6 +353,13 @@ function explorerHandler(world: World): Handler {
       const n = world.chain.names.find((x) => (byName ? x.name === key.toLowerCase() : x.address === key));
       return n ? { json: { name: n.name, address: n.address, records: n.records } } : { json: { error: 'no_name' }, status: 404 };
     }
+    // Contracts an address created.
+    const made = path.match(/^\/api\/v1\/address\/([^/]+)\/deployed$/);
+    if (made) {
+      const acc = account(decodeURIComponent(made[1]));
+      if (!acc) return { json: { error: 'invalid_address' }, status: 400 };
+      return { json: { address: acc.address, contracts: world.chain.deployments.filter((d) => d.creator === acc.address).map((d) => ({ address: d.contract, txHash: d.txHash, at: d.at })) } };
+    }
     let m = path.match(/^\/api\/v1\/address\/([^/]+)(\/transfers)?$/);
     if (m) {
       const acc = account(decodeURIComponent(m[1]));
@@ -343,6 +376,7 @@ function explorerHandler(world: World): Handler {
         .join('\n');
       return page('explorer', acc.address, `<section><h1 style="font-size:15px;word-break:break-all">${esc(acc.address)}</h1>
 <p>Sieć: ${esc(acc.chain)} · Etykieta: <strong class="label">${acc.label ? `${esc(acc.label.name)} [${esc(acc.label.category)}]` : 'brak'}</strong> · Kod: ${acc.code === '0x' ? 'brak (zwykły adres)' : esc(acc.code.slice(0, 24)) + '…'}</p>
+${'creator' in acc && acc.creator ? `<p>Kontrakt utworzony z adresu ${link(acc.creator)} dnia ${esc(String(acc.createdAt).slice(0, 10))}</p>` : ''}
 <p>Transakcji: ${acc.txCount} · Saldo: ${acc.balances.map((b) => `${b.amount} ${esc(b.asset)}`).join(', ') || '0'}</p></section>
 <section><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th align="left">Czas (UTC)</th><th align="left">Kierunek</th><th align="left">Kontrahent</th><th align="right">Kwota</th><th align="left">Tx</th></tr></thead><tbody>${rows}</tbody></table></section>`);
     }

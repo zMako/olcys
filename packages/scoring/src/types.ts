@@ -1,7 +1,8 @@
-import type { AccountInfo, Identifier, NameRecord } from '@olcys/core';
+import type { AccountInfo, Deployment, Fingerprint, Identifier, NameRecord } from '@olcys/core';
 import type { AmountMatch } from './amounts';
 import type { ProfileHistory } from './history';
 import type { WalletMember } from './indicators';
+import type { Rhythm } from './rhythm';
 
 /** Everything a run established, in the shape the scoring needs. Scoring is a pure function of this and the ruleset. */
 export interface RunFacts {
@@ -20,6 +21,10 @@ export interface RunFacts {
   amountMatches?: AmountMatch[];
   /** Readable source names by origin, e.g. { bitrozmowy: 'BitRozmowy' }. */
   sources?: Record<string, string>;
+  /** Contracts and the addresses that created them, as far as the run looked them up. */
+  deployments?: Deployment[];
+  /** Value movements on the analysed wallets (`subject` is the published address of the wallet). */
+  transfers?: { subject: string; chain: string; txHash: string; at: string; from: string; to: string }[];
 }
 
 export interface DocFact {
@@ -39,6 +44,8 @@ export interface DocFact {
   publishedAt?: string;
   fetchedAt: string;
   snapshotSha256: string;
+  /** Hashes and key fingerprints the profile shows (avatar e-mail hash, public keys). */
+  fingerprints?: Fingerprint[];
 }
 
 export interface HitFact {
@@ -81,11 +88,12 @@ export type Placement = 'own_profile' | 'sale' | 'discussion' | 'mass_comment' |
  *  - entered:        an account matches the entered nick / e-mail / phone / URL exactly;
  *  - publisher:      the analyst entered an address and this account published it;
  *  - handle_variant: matched by a nick that differs only in spelling (separators), with nothing else to tie it;
+ *  - handle_similar: matched by a nick that merely contains the entered one, with nothing to confirm it;
  *  - name_unique:    matched by name only, and it is the only account with that name;
  *  - name_ambiguous: matched by name only, and several unrelated accounts carry that name;
  *  - third_party:    someone else who merely appears in the material.
  */
-export type ClusterLevel = 'entered' | 'publisher' | 'handle_variant' | 'name_unique' | 'name_ambiguous' | 'third_party';
+export type ClusterLevel = 'entered' | 'publisher' | 'handle_variant' | 'name_unique' | 'handle_similar' | 'name_ambiguous' | 'third_party';
 
 export interface ClusterAccount {
   origin: string;
@@ -107,6 +115,8 @@ export interface Cluster {
   joins: { rule: string; detail: string }[];
   /** Contact details and names the accounts list about themselves. */
   identifiers: Identifier[];
+  /** When the person publishes on the web versus when transfers leave their addresses. */
+  rhythm?: Rhythm;
 }
 
 export interface Occurrence {
@@ -145,8 +155,8 @@ export interface ReceiptLine {
   rule: string;
   title: string;
   detail: string;
-  effect: 'base' | 'bonus' | 'cap' | 'exclusion' | 'info';
-  /** Points added (bonus) or the value set (base, cap, exclusion). Null for information-only lines. */
+  effect: 'base' | 'bonus' | 'penalty' | 'cap' | 'exclusion' | 'info';
+  /** Points added (bonus), taken away (penalty) or the value set (base, cap, exclusion). Null for information-only lines. */
   points: number | null;
   /** Score after this line. */
   total: number;

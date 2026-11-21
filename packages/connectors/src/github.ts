@@ -1,4 +1,4 @@
-import { makeIdentifier, normalizeIdentifier, type ConnectorContext, type FetchedResource, type Identifier, type Relation, type Segment, type SourceConnector, type SourceItem } from '@olcys/core';
+import { makeIdentifier, normalizeIdentifier, sshKeyFingerprint, type ConnectorContext, type FetchedResource, type Fingerprint, type Identifier, type Relation, type Segment, type SourceConnector, type SourceItem } from '@olcys/core';
 
 export interface GithubOptions {
   /** Personal access token. Without one the public API allows 60 requests an hour per IP address and no code search. */
@@ -56,10 +56,20 @@ export function createGithubConnector(opts: GithubOptions = {}): SourceConnector
     if (u.name) discovered.push(makeIdentifier('full_name', u.name));
     if (u.blog && /^https?:\/\//i.test(u.blog)) discovered.push(makeIdentifier('profile_url', u.blog));
     if (u.twitter_username) discovered.push(makeIdentifier('username', u.twitter_username));
+    // Public SSH keys of the account: the same key on another account means the same owner.
+    const fingerprints: Fingerprint[] = [];
+    if (relation !== 'mention') {
+      const keys = await get(ctx, `/users/${u.login}/keys`);
+      const list: unknown = keys ? JSON.parse(keys.body) : [];
+      for (const k of Array.isArray(list) ? (list as { key?: string }[]) : []) {
+        const value = k.key ? sshKeyFingerprint(k.key) : undefined;
+        if (value) fingerprints.push({ kind: 'ssh_key', value, sourceUrl: `${u.html_url}.keys` });
+      }
+    }
     yield {
       snapshotId: res.snapshotId, url: u.html_url, resourceId: `user:${u.login}`, docType: 'profile', title: u.login,
       author: { handle: u.login, displayName: u.name ?? undefined, profileUrl: u.html_url }, publishedAt: u.created_at,
-      container: { kind: 'profile', section: u.location ?? undefined }, relation, segments, discovered,
+      container: { kind: 'profile', section: u.location ?? undefined }, relation, segments, discovered, fingerprints,
     };
     if (relation === 'mention') return;
 
@@ -112,6 +122,13 @@ export function createGithubConnector(opts: GithubOptions = {}): SourceConnector
           container: { kind: 'repository', id: hit.repository.full_name }, relation: 'mention', segments: [{ kind: 'readme', text: file.body }], discovered: [],
         };
       }
+    },
+    /** Logins that contain the given nick (GitHub's own user search), other than the nick itself. */
+    async enumerate(id, ctx) {
+      if (id.kind !== 'username' || !/^[a-z\d][a-z\d-]{4,38}$/i.test(id.normalized)) return [];
+      const found = await get(ctx, `/search/users?q=${encodeURIComponent(`${id.normalized} in:login type:user`)}&per_page=10`);
+      if (!found) return [];
+      return (JSON.parse(found.body) as { items?: { login: string }[] }).items?.map((x) => x.login).filter((l) => l.toLowerCase() !== id.normalized) ?? [];
     },
   };
 }

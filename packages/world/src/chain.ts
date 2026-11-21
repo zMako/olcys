@@ -4,6 +4,9 @@ import { priceUsd, usdPlnBefore } from './fixtures';
 import { Rng } from './rng';
 import { makeWallet, type WalletKind } from './wallet';
 
+/** Address of the contract the scripted subject deployed from an address he never published. */
+export const skarbonkaAddress = (seed: string) => makeWallet(`${seed}|contract`, 'eth', 'skarbonka').address;
+
 const NATIVE: Record<Chain, string> = { bitcoin: 'BTC', ethereum: 'ETH', tron: 'TRX' };
 const round = (n: number) => Math.round(n * 1e8) / 1e8;
 
@@ -16,7 +19,7 @@ export function generateChain(world: Pick<World, 'personas' | 'seed' | 'now'>, h
   const seed = world.seed;
   const rng = new Rng(`${seed}|chain`);
   const now = Date.parse(world.now);
-  const chain: WorldChain = { entities: [], txs: [], codes: {}, expected: [], wallets: [], names: [] };
+  const chain: WorldChain = { entities: [], txs: [], codes: {}, expected: [], wallets: [], names: [], deployments: [] };
 
   let extCounter = 0;
   /** A fresh outside address nobody in the world knows anything about. */
@@ -37,6 +40,12 @@ export function generateChain(world: Pick<World, 'personas' | 'seed' | 'now'>, h
   const pay = (c: Chain, at: string, from: string, to: string, amount: number, asset = NATIVE[c]) => tx(c, at, [{ from, to, asset, amount }]);
   const plus = (iso: string, minutes: number) => new Date(Date.parse(iso) + minutes * 60_000).toISOString();
   const ago = (minDays: number, maxDays: number) => new Date(now - rng.int(minDays * 24, maxDays * 24) * 3_600_000).toISOString();
+  const warsawDay = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Warsaw' });
+  /** The same day in Poland, at an hour when the subject is awake: his transfers follow his daily rhythm. */
+  const daytime = (iso: string) => {
+    const d = new Date(iso);
+    return `${warsawDay.format(d)}T${String(8 + ((d.getUTCHours() * 60 + d.getUTCMinutes()) % 12)).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:00.000Z`;
+  };
 
   // Real public institutions and contracts: labelled, contracts carry bytecode.
   for (const l of BUNDLED_LABELS) {
@@ -142,7 +151,7 @@ export function generateChain(world: Pick<World, 'personas' | 'seed' | 'now'>, h
       balance += amount;
       if (i % 3 === 2) {
         const out = Math.floor((balance * 0.8) / 50) * 50;
-        pay('tron', new Date(day + 2 * 86_400_000).toISOString(), tron, i % 2 ? card : escrow.tron, out, 'USDT');
+        pay('tron', daytime(new Date(day + 2 * 86_400_000).toISOString()), tron, i % 2 ? card : escrow.tron, out, 'USDT');
         balance -= out;
       }
     }
@@ -175,6 +184,33 @@ export function generateChain(world: Pick<World, 'personas' | 'seed' | 'now'>, h
     }
   };
   for (const p of world.personas) if (p.id !== heroId) background(p);
+
+  // ---------- added after everything else, so earlier addresses and transaction ids keep their values ----------
+  // A contract the subject deployed from an address he never published anywhere. The contract is named in a
+  // repository of his work account; the explorer knows which address created it.
+  const deployer = hero.wallets.find((x) => x.kind === 'eth' && x.label === 'deployer')?.address;
+  if (deployer) {
+    const skarbonka = skarbonkaAddress(seed);
+    chain.codes[skarbonka] = '0x6080604052600436106100345760003560e01c' + sha256Hex(skarbonka).slice(0, 40);
+    chain.deployments.push({ contract: skarbonka, creator: deployer, txHash: '0x' + sha256Hex(`deploy|${skarbonka}`), at: '2025-03-04T18:40:00.000Z' });
+    pay('ethereum', '2025-02-20T18:05:00.000Z', ext('eth'), deployer, 0.4);
+    for (const [at, amount] of [['2025-03-09T11:20:00.000Z', 1.1], ['2025-04-14T16:45:00.000Z', 0.9], ['2025-05-28T09:30:00.000Z', 1.4]] as const) pay('ethereum', at, ext('eth'), skarbonka, amount);
+    pay('ethereum', '2025-06-30T17:15:00.000Z', skarbonka, deployer, 3.2); // withdrawal after the term
+    pay('ethereum', '2025-07-02T18:22:00.000Z', deployer, escrow.ethereum, 1.9);
+    pay('ethereum', '2025-08-11T19:03:00.000Z', deployer, escrow.ethereum, 1.2);
+    chain.expected.push({ address: deployer, personaId: hero.id, indicators: ['p2p'] });
+  }
+
+  // A friend overseas whose address the subject once posted. His transfers go out in the evening of his own
+  // time zone — the middle of the night in Poland, when the subject is never active.
+  const friend = world.personas.find((p) => p.id === 'kolega')?.wallets[0]?.address;
+  if (friend) {
+    for (const [at, amount] of [['2025-03-28T16:10:00.000Z', 0.21], ['2025-05-02T23:40:00.000Z', 0.18], ['2025-06-21T00:15:00.000Z', 0.26]] as const) pay('bitcoin', at, ext('btc-segwit'), friend, amount);
+    for (const [at, amount] of [
+      ['2025-04-09T02:12:00.000Z', 0.03], ['2025-04-30T03:05:00.000Z', 0.05], ['2025-05-17T01:48:00.000Z', 0.04], ['2025-06-08T02:37:00.000Z', 0.06],
+      ['2025-07-01T03:22:00.000Z', 0.05], ['2025-07-26T01:55:00.000Z', 0.07], ['2025-08-19T02:44:00.000Z', 0.04],
+    ] as const) pay('bitcoin', at, friend, ext('btc-segwit'), amount);
+  }
 
   // One ordinary user has upgraded their address with an EIP-7702 delegation: it has bytecode but is still a personal wallet.
   // A forum user who only dropped an address in a discussion, but whose address carries a name pointing back at the forum nick.

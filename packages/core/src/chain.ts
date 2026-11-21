@@ -58,6 +58,17 @@ export interface Transfer {
   snapshotId?: string;
 }
 
+/** A contract and the address that created it. */
+export interface Deployment {
+  chain: Chain;
+  contract: string;
+  creator: string;
+  txHash?: string;
+  at?: string;
+  sourceUrl?: string;
+  snapshotId?: string;
+}
+
 /** A Web3 source (block explorer / node API). Adding a chain data provider = implementing this. */
 export interface ChainConnector {
   id: string;
@@ -65,6 +76,10 @@ export interface ChainConnector {
   supports(chain: Chain): boolean;
   getAccount(chain: Chain, address: string, ctx: ConnectorContext): Promise<AccountInfo>;
   getTransfers(chain: Chain, address: string, ctx: ConnectorContext): Promise<Transfer[]>;
+  /** Which address created a contract. Optional: needs an indexer, a plain node cannot answer it. */
+  getCreator?(chain: Chain, contract: string, ctx: ConnectorContext): Promise<Deployment | undefined>;
+  /** Contracts an address created. */
+  getDeployed?(chain: Chain, address: string, ctx: ConnectorContext): Promise<Deployment[]>;
 }
 
 /** Official average exchange rate, as published by the central bank. */

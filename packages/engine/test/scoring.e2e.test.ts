@@ -48,12 +48,14 @@ describe('mandatory scenario: the scripted subject, from one forum nick', () => 
   });
 
   it('joins the accounts of one person on hard evidence only', () => {
-    const [subject, other] = s.assessment!.clusters;
+    const [subject, lookalike, other] = s.assessment!.clusters;
     expect(subject).toMatchObject({ id: 'T1', level: 'entered', identityCap: 100 });
-    expect(subject.accounts.map((a) => `${a.origin}:${a.handle}`).sort()).toEqual(['bazarek:SzklaneDomy', 'bazarek:eth_od_reki', 'bitrozmowy:nocny_kantor', 'bitrozmowy:szklane_domy', 'kodownia:szklanedomy']);
-    expect(new Set(subject.joins.map((j) => j.rule))).toEqual(new Set(['J1', 'J2', 'J3', 'J4', 'J6', 'J7']));
+    expect(subject.accounts.map((a) => `${a.origin}:${a.handle}`).sort()).toEqual(['bazarek:SzklaneDomy', 'bazarek:eth_od_reki', 'bitrozmowy:nocny_kantor', 'bitrozmowy:szklane_domy', 'kodownia:szklanedomy', 'kodownia:szklanedomy-labs']);
+    expect(new Set(subject.joins.map((j) => j.rule))).toEqual(new Set(['J1', 'J2', 'J3', 'J4', 'J6', 'J7', 'J8', 'J9']));
+    // an account with a similar nick that nothing confirms is kept apart (see signals.e2e.test.ts)
+    expect(lookalike).toMatchObject({ id: 'T2', level: 'handle_similar', identityCap: 49 });
     // the namesake is found, kept apart, and marked as ambiguous
-    expect(other).toMatchObject({ id: 'T2', level: 'name_ambiguous', identityCap: 39 });
+    expect(other).toMatchObject({ id: 'T3', level: 'name_ambiguous', identityCap: 39 });
     expect(other.accounts).toEqual([expect.objectContaining({ handle: 'czarek_b' })]);
   });
 
@@ -195,6 +197,12 @@ describe('mandatory scenario: the scripted subject, from one forum nick', () => 
     for (const t of world.truth.filter((p) => p.postedBy === HERO_ID && p.expected === 'excluded')) {
       const l = linkOf(s, t.address);
       expect(l, t.entity!.name).toMatchObject({ status: 'excluded', score: 0, band: 'excluded' });
+      if (t.where === 'repo') {
+        // his own contract: not a wallet either, but the mention says so in other words
+        expect(rules(l)).toEqual(['X2', 'F1']);
+        expect(l.receipt[1].detail).toContain('jako własny projekt');
+        continue;
+      }
       expect(rules(l)).toEqual(['X1', 'F1']);
       expect(l.receipt[0].detail).toContain(t.entity!.name);
     }
@@ -208,7 +216,7 @@ describe('mandatory scenario: the scripted subject, from one forum nick', () => 
 
   it('caps the namesake by identity confidence instead of merging him with the subject', () => {
     const namesake = world.personas.find((p) => p.id === NAMESAKE_ID)!;
-    const l = linkOf(s, namesake.wallets[0].address, 'T2');
+    const l = linkOf(s, namesake.wallets[0].address, 'T3');
     expect(l).toMatchObject({ status: 'attributed', score: 39, band: 'noise' });
     expect(l.receipt.at(-1)).toMatchObject({ rule: 'T1', effect: 'cap', points: 39 });
     expect(s.assessment!.links.some((x) => x.address === namesake.wallets[0].address && x.clusterId === 'T1')).toBe(false);
@@ -251,11 +259,17 @@ describe('mandatory scenario: the scripted subject, from one forum nick', () => 
     const e = s.estimate!;
     expect(e.years.map((y) => y.year)).toEqual([2024, 2025]);
     expect(e.unvalued).toBe(0);
-    expect(e.addresses.map((a) => a.address).sort()).toEqual([wallet('btc-segwit'), wallet('btc-segwit', 'sales'), wallet('btc-legacy'), wallet('eth'), wallet('tron'), wallet('tron', 'alt')].sort());
+    expect(e.addresses.map((a) => a.address).sort()).toEqual([wallet('btc-segwit'), wallet('btc-segwit', 'sales'), wallet('btc-legacy'), wallet('eth'), wallet('eth', 'deployer'), wallet('tron'), wallet('tron', 'alt')].sort());
     expect(e.addresses.find((a) => a.address === wallet('eth'))!.walletSize).toBe(2);
     expect(e.addresses.find((a) => a.address === wallet('btc-segwit'))!.walletSize).toBe(6);
     const namesake = world.personas.find((p) => p.id === NAMESAKE_ID)!;
-    expect(e.leftOut).toEqual([expect.objectContaining({ address: namesake.wallets[0].address, score: 39 })]);
+    // left out: the namesake, the account with a merely similar nick, and the friend's address with a foreign daily rhythm
+    expect(e.leftOut).toHaveLength(3);
+    expect(e.leftOut).toEqual(expect.arrayContaining([
+      expect.objectContaining({ address: namesake.wallets[0].address, score: 39 }),
+      expect.objectContaining({ address: world.personas.find((p) => p.id === 'krk')!.wallets[0].address, score: 49 }),
+      expect.objectContaining({ address: world.personas.find((p) => p.id === 'kolega')!.wallets[0].address, score: 35 }),
+    ]));
 
     // the payment-gateway transfer of 22 April 2025: the day before was Easter Monday, so the table is from Friday the 18th
     const gateway = e.transfers.find((t) => t.channel === 'payment_gateway')!;
@@ -302,7 +316,7 @@ describe('acceptance scenarios: every background persona, checked against ground
   const PLACEMENT: Record<Placement['where'], string> = {
     profile: 'own_profile', signature: 'own_profile', repo: 'own_profile', ad: 'sale', discussion: 'discussion', giveaway: 'mass_comment', quote: 'quoted',
   };
-  const background = world.personas.filter((p) => p.id !== HERO_ID && p.id !== NAMESAKE_ID);
+  const background = world.personas.filter((p) => /^p\d+$/.test(p.id)); // the procedurally generated ones
 
   it('classifies every found placement as the ground truth says', async () => {
     let checked = 0;

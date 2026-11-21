@@ -29,7 +29,8 @@ const BAND: Record<string, string> = {
   very_high: 'bardzo wysokie', probable: 'prawdopodobne', medium: 'średnie', noise: 'niskie, szum', excluded: 'wykluczone', not_attributable: 'nie do przypisania',
 };
 const LEVEL: Record<string, string> = {
-  entered: 'Osoba, o którą pytano', publisher: 'Konto, które podało wprowadzony adres',
+  entered: 'Osoba, o którą pytano', publisher: 'Konto, które podało wprowadzony adres', handle_variant: 'Konto o nicku różniącym się tylko zapisem',
+  handle_similar: 'Konto o podobnym nicku, bez potwierdzenia',
   name_unique: 'Możliwe, że ta sama osoba (zgodne tylko imię i nazwisko)', name_ambiguous: 'Inna osoba o tym samym imieniu i nazwisku?',
 };
 const PLACEMENT: Record<string, string> = {
@@ -80,6 +81,10 @@ td.r, th.r { text-align: right; white-space: nowrap; font-variant-numeric: tabul
 .tag-F { color: #2c5a44; } .tag-O { color: #24467e; } .tag-W { color: #7a4f00; }
 .meta td:first-child { width: 48mm; color: #44506a; }
 .notice { margin: 4mm 0; padding: 2.5mm 4mm; border-left: 2pt solid #b98300; background: #fdf6e3; }
+.rhythm { font-size: 7.5pt; table-layout: fixed; }
+.rhythm th:first-child, .rhythm td:first-child { width: 44mm; }
+.rhythm .c { padding: 1mm 0; text-align: center; font-variant-numeric: tabular-nums; }
+.rhythm .q { background: #e3e7e7; }
 .legend { margin: 4mm 0; padding: 3mm 4mm; border: 0.6pt solid #a9b4b6; }
 .legend p { margin: 0 0 1.5mm; } .legend p:last-child { margin: 0; }
 .figures { display: flex; gap: 5mm; margin: 3mm 0 4mm; }
@@ -103,7 +108,7 @@ function receipt(l: Link): string {
     l.receipt.map((r) => [
       `<code>${esc(r.rule)}</code>`,
       `<b>${esc(r.title)}.</b> ${esc(r.detail)}`,
-      r.points === null ? '—' : r.effect === 'bonus' ? `+${r.points}` : r.effect === 'cap' ? `do ${r.points}` : String(r.points),
+      r.points === null ? '—' : r.effect === 'bonus' ? `+${r.points}` : r.effect === 'penalty' ? `−${r.points}` : r.effect === 'cap' ? `do ${r.points}` : String(r.points),
       `${r.total}%`,
     ]),
   );
@@ -186,6 +191,19 @@ export function renderReport(input: ReportInput): string {
     out.push(table(['Serwis', 'Nazwa konta', 'Adres profilu'], c.accounts.map((x) => [esc(x.source), `<b>${esc(x.handle)}</b>${x.displayName ? `, podpisane: ${esc(x.displayName)}` : ''}`, x.profileUrl ? `<a href="${esc(x.profileUrl)}">${esc(x.profileUrl)}</a>` : '—'])));
     if (c.joins.length) out.push(`<p>Dlaczego te konta uznano za jedną osobę:</p><ul>${c.joins.map((j) => `<li><code>${esc(j.rule)}</code> ${esc(j.detail)}</li>`).join('')}</ul>`);
     if (c.identifiers.length) out.push(`<p class="small">Dane podane przez osobę na profilach: ${c.identifiers.map((i) => `${KIND[i.kind] ?? i.kind} ${esc(i.value)}`).join('; ')}.</p>`);
+    // Daily rhythm: when the person publishes, and when transfers leave their addresses.
+    const r = c.rhythm;
+    if (r && (r.quiet || r.webCount >= 5) && (c.level === 'entered' || c.level === 'publisher')) {
+      const q = r.quiet;
+      const quiet = (h: number) => !!q && (h - q.from + 24) % 24 < q.hours;
+      const row = (label: string, hours: number[]) => `<tr><td>${esc(label)}</td>${hours.map((v, h) => `<td class="c${quiet(h) ? ' q' : ''}">${v || ''}</td>`).join('')}</tr>`;
+      out.push(`<p><b>Rytm doby.</b> ${esc(r.note)}</p>`);
+      out.push(`<table class="rhythm"><thead><tr><th>Godzina (czas polski)</th>${Array.from({ length: 24 }, (_, h) => `<th class="c${quiet(h) ? ' q' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${
+        row(`Wpisy i ogłoszenia (${r.webCount})`, r.web) + row(`Przelewy wychodzące (${r.chainCount})`, r.chain) +
+        r.conflicting.filter((x) => x.hours).map((x) => row(`Adres ${x.address.slice(0, 10)}… (${x.transfers})`, x.hours!)).join('')
+      }</tbody></table>`);
+      if (q) out.push('<p class="small">Szare kolumny to godziny, w których osoba nie publikuje w sieci. Zgodność rytmu nie dodaje punktów, bo podobny rytm ma wiele osób; przelewy w tych godzinach obniżają wynik adresu (reguła R2).</p>');
+    }
   }
 
   // ---- profiles over time
@@ -216,7 +234,7 @@ export function renderReport(input: ReportInput): string {
     out.push(table(['Miejsce', 'Autor', 'Fragment treści', 'Pobrano (UTC)'], l.occurrences.map((o) => [
       `${esc(PLACEMENT[o.placement])}, ${esc(o.source)}${o.archivedAt ? `<br><i>wersja archiwalna z ${o.archivedAt.slice(0, 10)}</i>` : ''}${o.image ? '<br><i>kod QR na zdjęciu</i>' : ''}<br><a href="${esc(o.image?.url ?? o.url)}">${esc(o.image?.url ?? o.url)}</a>`,
       `${esc(o.authorHandle ?? '—')}${o.quotedAuthor ? `<br>cytuje: ${esc(o.quotedAuthor)}` : ''}`,
-      `${esc(o.context)}${o.method !== 'plain' ? '<br><i>adres był ukryty przed automatami</i>' : ''}`,
+      `${esc(o.context)}${o.method === 'deployer' ? '<br><i>adresu nie ma w treści; ustalono go jako twórcę podanego kontraktu</i>' : o.method === 'ens' ? '<br><i>w treści podano nazwę, która wskazuje ten adres</i>' : o.obfuscation.length ? '<br><i>adres był ukryty przed automatami</i>' : ''}`,
       `${minute(o.fetchedAt)}<br><span class="mono hash">${esc(o.snapshotSha256.slice(0, 20))}…</span>`,
     ])));
   };

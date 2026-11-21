@@ -4,7 +4,7 @@ import type { AddressLabel } from '@olcys/core';
 export type RunEvent =
   | { type: 'run.started'; seeds: { kind: string; value: string }[] }
   /** An identifier was queued for searching: entered by the analyst or found on a document. */
-  | { type: 'lead'; kind: string; value: string; depth: number; origin: 'seed' | 'discovered' | 'variant' | 'wallet' | 'name'; fromDocumentId?: string }
+  | { type: 'lead'; kind: string; value: string; depth: number; origin: 'seed' | 'discovered' | 'variant' | 'similar' | 'wallet' | 'name'; fromDocumentId?: string }
   | { type: 'search'; connectorId: string; source: string; kind: string; value: string }
   | {
       type: 'document'; documentId: string; connectorId: string; origin: string; source: string; docType: string; url: string; title?: string;
@@ -38,6 +38,8 @@ export type RunEvent =
       totals: { asset: string; amount: number }[]; counterparties: { address: string; name?: string; category?: string }[];
     }
   | { type: 'estimate'; totalPln: number; years: { year: number; probablePln: number; possiblePln: number; totalPln: number }[] }
+  /** The explorer says which address created a contract. */
+  | { type: 'deployment'; chain: string; contract: string; creator: string; txHash?: string; at?: string }
   /** What changed since the previous analysis of the same case. */
   | {
       type: 'diff'; baseRunId: string; changed: boolean; summary: string;

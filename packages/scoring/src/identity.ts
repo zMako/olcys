@@ -1,4 +1,4 @@
-import { identifierKey, makeIdentifier, normalizeIdentifier, usernameVariants, type Identifier } from '@olcys/core';
+import { emailHashes, identifierKey, makeIdentifier, normalizeIdentifier, similarHandle, usernameVariants, type Identifier } from '@olcys/core';
 import type { Ruleset } from './ruleset';
 import type { Cluster, ClusterAccount, ClusterLevel, DocFact, MentionFact, Placement, RunFacts } from './types';
 
@@ -7,7 +7,8 @@ export const accountKeyOf = (d: Pick<DocFact, 'origin' | 'authorHandle'>): strin
 
 const HARD_KINDS = new Set(['email', 'phone', 'messenger_id', 'profile_url']);
 const KIND_PL: Record<string, string> = { email: 'adres e-mail', phone: 'numer telefonu', messenger_id: 'identyfikator komunikatora', profile_url: 'odnośnik do profilu' };
-const LEVEL_ORDER: ClusterLevel[] = ['entered', 'publisher', 'handle_variant', 'name_unique', 'name_ambiguous', 'third_party'];
+const LEVEL_ORDER: ClusterLevel[] = ['entered', 'publisher', 'handle_variant', 'name_unique', 'handle_similar', 'name_ambiguous', 'third_party'];
+const FINGERPRINT_PL: Record<string, string> = { email_md5: 'skrót adresu e-mail w adresie awatara', email_sha256: 'skrót adresu e-mail w adresie awatara', ssh_key: 'klucz publiczny SSH', pgp_key: 'klucz publiczny PGP' };
 
 export interface Identities {
   /** Clusters tied to what the analyst entered, strongest first. */
@@ -34,6 +35,9 @@ export interface IdentityContext {
  *   J6  each published an address of the same on-chain wallet (addresses spent together in one transaction);
  *       nothing on the web has to connect the two accounts — the blockchain does;
  *   J7  the on-chain name of an address one account published has a record pointing at the other account;
+ *   J8  the avatar of one account is addressed by the hash of the e-mail the other account lists;
+ *   J9  both carry the same public key (SSH or PGP);
+ *   J10 one shows as its own a contract that was created from an address the other published;
  *   J5  both carry the exact nick (or other hard identifier) the analyst entered — the KAS method
  *       treats traces "tied to the same nick or phone number" as belonging together.
  * A matching name alone never joins two accounts.
@@ -170,6 +174,57 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
     }
   }
 
+  // J8: avatar services address a picture by the hash of the owner's e-mail. An account that shows no e-mail
+  // still gives its hash away; if that is the hash of an e-mail another account lists, both are one person's.
+  const emailByHash = new Map<string, { email: string; key: string }>();
+  for (const d of selfDocs) {
+    for (const l of d.discovered) {
+      if (l.kind !== 'email') continue;
+      const h = emailHashes(l.normalized);
+      for (const v of [h.md5, h.sha256]) if (!emailByHash.has(v)) emailByHash.set(v, { email: l.value, key: accountKeyOf(d)! });
+    }
+  }
+  for (const d of selfDocs) {
+    for (const f of d.fingerprints ?? []) {
+      if (f.kind !== 'email_md5' && f.kind !== 'email_sha256') continue;
+      const hit = emailByHash.get(f.value);
+      const k = accountKeyOf(d)!;
+      if (hit && hit.key !== k) join(hit.key, k, 'J8', `adres awatara konta ${label(k)} zawiera skrót ${f.value.slice(0, 12)}…, a jest to skrót adresu e-mail ${hit.email}, który podaje konto ${label(hit.key)}`);
+    }
+  }
+
+  // J9: the same public key on two accounts. A key pair is generated on one machine and reused by its owner.
+  const keyHolders = new Map<string, Set<string>>();
+  for (const d of selfDocs) {
+    for (const f of d.fingerprints ?? []) {
+      if (f.kind !== 'ssh_key' && f.kind !== 'pgp_key') continue;
+      const id = `${f.kind}|${f.value}`;
+      keyHolders.set(id, (keyHolders.get(id) ?? new Set()).add(accountKeyOf(d)!));
+    }
+  }
+  for (const [id, keys] of keyHolders) {
+    const list = [...keys].sort();
+    if (list.length < 2 || list.length > ruleset.keys.maxHolders) continue; // a key on many accounts is a shared machine or a deploy key
+    const [kind, value] = id.split('|');
+    for (let i = 1; i < list.length; i++) join(list[0], list[i], 'J9', `konta ${label(list[0])} i ${label(list[i])} mają wgrany ten sam ${FINGERPRINT_PL[kind]} (${value.slice(0, 20)}…)`);
+  }
+
+  // J10: an account shows a contract as its own project, and the blockchain says which address created it.
+  // If another account published that address, the two meet on chain.
+  const contractShowers = new Map<string, Set<string>>();
+  for (const m of facts.mentions) {
+    const d = docs.get(m.documentId)!;
+    const k = accountKeyOf(d);
+    if (k && ctx.placementOf(d, m) === 'own_profile') contractShowers.set(m.address, (contractShowers.get(m.address) ?? new Set()).add(k));
+  }
+  for (const dep of facts.deployments ?? []) {
+    for (const shower of contractShowers.get(dep.contract) ?? []) {
+      for (const holder of ownPublishers.get(dep.creator) ?? []) {
+        join(holder, shower, 'J10', `${label(shower)} podaje jako własny kontrakt ${shortAddr(dep.contract)}, a utworzono go z adresu ${shortAddr(dep.creator)}, który podaje ${label(holder)}`);
+      }
+    }
+  }
+
   // J5: accounts that each match the same entered hard identifier.
   const enteredHard = new Map(facts.seeds.filter((x) => x.kind !== 'full_name' && x.kind !== 'crypto_address').map((x) => [identifierKey(x), x]));
   const matched = new Map<string, Set<string>>();
@@ -195,9 +250,12 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
   const addressSeeds = new Set(facts.seeds.filter((s) => s.kind === 'crypto_address').map((s) => s.normalized));
   // Other spellings of the entered nick ("szklane_domy" → "szklanedomy"): likely the same person, but not certain.
   const variantSeeds = new Set(facts.seeds.filter((x) => x.kind === 'username').flatMap((x) => usernameVariants(x.value)).map((v) => identifierKey(makeIdentifier('username', v))));
+  const nickSeeds = facts.seeds.filter((x) => x.kind === 'username');
   const entered = new Set<string>();
   const variant = new Set<string>();
+  const similar = new Set<string>();
   const publisher = new Set<string>();
+  const viaContract = new Set<string>();
   const nameMatches = new Map<string, Set<string>>(); // group root → names it was matched by
   const nameCarriers = new Map<string, Set<string>>(); // name → group roots carrying it
 
@@ -211,6 +269,7 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
     const root = find(k);
     if (hardSeeds.has(identifierKey(h.identifier))) entered.add(root);
     if (variantSeeds.has(identifierKey(h.identifier))) variant.add(root);
+    if (h.identifier.kind === 'username' && h.relation === 'profile_owner' && nickSeeds.some((x) => similarHandle(x.value, h.identifier.value))) similar.add(root);
     if (h.identifier.kind === 'full_name' && h.relation === 'profile_owner') {
       nameMatches.set(root, (nameMatches.get(root) ?? new Set()).add(h.identifier.normalized));
       carry(h.identifier.normalized, root);
@@ -220,6 +279,19 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
     if (!addressSeeds.has(m.address) || m.segmentKind === 'quote') continue;
     const k = accountKeyOf(docs.get(m.documentId)!);
     if (k) publisher.add(find(k));
+  }
+  // An account that shows as its own a contract created from the entered address stands as close to it as one that published it.
+  for (const dep of facts.deployments ?? []) {
+    if (!addressSeeds.has(dep.creator)) continue;
+    for (const k of contractShowers.get(dep.contract) ?? []) {
+      if (!publisher.has(find(k))) viaContract.add(find(k));
+      publisher.add(find(k));
+    }
+  }
+  // An entered e-mail matches an account that shows only its hash.
+  const seedEmailHashes = new Set(facts.seeds.filter((x) => x.kind === 'email').flatMap((x) => Object.values(emailHashes(x.normalized))));
+  for (const d of selfDocs) {
+    if ((d.fingerprints ?? []).some((f) => (f.kind === 'email_md5' || f.kind === 'email_sha256') && seedEmailHashes.has(f.value))) entered.add(find(accountKeyOf(d)!));
   }
 
   const built: (Cluster & { root: string })[] = [];
@@ -231,19 +303,26 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
       note = 'Konto odpowiada wprost wprowadzonemu identyfikatorowi albo jest z nim połączone odnośnikiem lub danymi kontaktowymi.';
     } else if (publisher.has(root)) {
       level = 'publisher';
-      note = 'Konto samo opublikowało wprowadzony adres.';
+      note = viaContract.has(root) ? 'Konto podaje jako własny kontrakt, który utworzono z wprowadzonego adresu.' : 'Konto samo opublikowało wprowadzony adres.';
     } else if (variant.has(root)) {
       level = 'handle_variant';
       note = `Konto znaleziono po nicku, który różni się od wprowadzonego tylko zapisem (na przykład brakiem podkreślnika). To prawdopodobnie ta sama osoba, ale nic więcej tych kont nie łączy — wynik ograniczony do ${ruleset.identityCaps.handle_variant}%.`;
-    } else if (nameMatches.has(root)) {
-      const names = [...nameMatches.get(root)!];
-      const carriers = Math.max(...names.map((n) => nameCarriers.get(n)?.size ?? 1));
-      if (carriers >= 2) {
-        level = 'name_ambiguous';
-        note = `Konto dopasowane wyłącznie po imieniu i nazwisku, a to samo imię i nazwisko mają ${carriers} niepowiązane ze sobą grupy kont. Bez drugiego śladu nie wiadomo, czy to ta sama osoba — wynik ograniczony do ${ruleset.identityCaps.name_ambiguous}%.`;
-      } else {
+    } else {
+      const names = [...(nameMatches.get(root) ?? [])];
+      const carriers = names.length ? Math.max(...names.map((n) => nameCarriers.get(n)?.size ?? 1)) : 0;
+      if (names.length && carriers < 2) {
         level = 'name_unique';
         note = `Konto dopasowane wyłącznie po imieniu i nazwisku. Innych kont o tym nazwisku nie znaleziono, ale zbieżność nazwisk jest możliwa — wynik ograniczony do ${ruleset.identityCaps.name_unique}%.`;
+      } else if (similar.has(root)) {
+        // The nick merely contains the entered one. Say what was checked, so the limit is not mistaken for a guess.
+        const shown = [...new Set(selfDocs.filter((d) => keys.includes(accountKeyOf(d)!)).flatMap((d) => d.fingerprints ?? []).map((f) => FINGERPRINT_PL[f.kind]))];
+        level = 'handle_similar';
+        note = `Konto znaleziono po nicku, który zawiera wprowadzony nick. ${
+          shown.length ? `Sprawdzono to, co konto o sobie ujawnia (${shown.join(', ')}): nie odpowiada żadnemu kontu badanej osoby.` : 'Konto nie ujawnia niczego, czym można by je potwierdzić.'
+        } Podobny nick może mieć każdy — wynik ograniczony do ${ruleset.identityCaps.handle_similar}%.`;
+      } else if (names.length) {
+        level = 'name_ambiguous';
+        note = `Konto dopasowane wyłącznie po imieniu i nazwisku, a to samo imię i nazwisko mają ${carriers} niepowiązane ze sobą grupy kont. Bez drugiego śladu nie wiadomo, czy to ta sama osoba — wynik ograniczony do ${ruleset.identityCaps.name_ambiguous}%.`;
       }
     }
     const identifiers = new Map<string, Identifier>();

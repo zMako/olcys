@@ -201,6 +201,18 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 @keyframes print { from { opacity: 0; transform: translateY(-5px); } }
 @keyframes stamp { from { opacity: 0; transform: rotate(-5deg) scale(1.7); } }
 
+/* ---------- daily rhythm */
+.rhythm { margin: 4px 0 12px; }
+.rhythm-label { margin-top: 8px; font-size: 13.5px; color: var(--ink-2); }
+.rhythm-row { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; height: 36px; margin-top: 3px; border-bottom: 1px solid var(--line-strong); }
+.rhythm-row > span { position: relative; display: block; height: 100%; }
+.rhythm-row > span.quiet-hour { background: #dfe4e4; }
+.rhythm-row > span > i { position: absolute; left: 0; right: 0; bottom: 0; background: #256abf; border-radius: 2px 2px 0 0; }
+.rhythm-row.off > span > i { background: var(--critical); }
+.rhythm-axis { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.rhythm-key { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-size: 13px; color: var(--ink-3); }
+.rhythm-key .swatch { width: 14px; height: 12px; background: #dfe4e4; border: 1px solid var(--line-strong); }
+
 /* ---------- repeated analyses */
 .changes { padding: 8px 12px; border-left: 3px solid var(--stamp); background: #efedfb; }
 .changes-list li { padding: 6px 0 6px 12px; border-left: 3px solid var(--stamp); margin: 6px 0; font-size: 14.5px; }

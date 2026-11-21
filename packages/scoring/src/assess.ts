@@ -1,6 +1,7 @@
 import { bundledLabel, foldDiacritics, type AccountInfo, type AddressLabel } from '@olcys/core';
 import { accountKeyOf, resolveIdentities } from './identity';
 import { buildHistories } from './history';
+import { compareRhythm, hourHistogram, inWindow, quietHoursOf, windowText, type Rhythm } from './rhythm';
 import { DEFAULT_RULESET, bandOf, type Ruleset } from './ruleset';
 import type { Assessment, BandId, Challenge, ClusterAccount, DocFact, Link, MentionFact, Occurrence, Placement, ReceiptLine, RunFacts } from './types';
 
@@ -81,6 +82,20 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
   const histories = buildHistories(facts);
   const day = (iso?: string) => (iso ? iso.slice(0, 10) : '?');
 
+  /** Transfers that left the wallet an address belongs to: the moments its owner acted. */
+  const outgoing = (chain: string, address: string): { txHash: string; at: string }[] => {
+    const wallet = (facts.wallets ?? []).find((w) => w.chain === chain && w.members.some((m) => m.address === address));
+    const members = new Set(wallet ? wallet.members.map((m) => m.address) : [address]);
+    const seen = new Set<string>();
+    const out: { txHash: string; at: string }[] = [];
+    for (const t of facts.transfers ?? []) {
+      if (t.chain !== chain || !members.has(t.from) || members.has(t.to) || seen.has(t.txHash)) continue;
+      seen.add(t.txHash);
+      out.push({ txHash: t.txHash, at: t.at });
+    }
+    return out;
+  };
+
   const links: Link[] = [];
   for (const cluster of ids.clusters) {
     const byAddress = new Map<string, Occurrence[]>();
@@ -104,10 +119,38 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
       ]);
     }
 
+    // A contract the person shows as their own was created from some address. That address is theirs to explain
+    // even though they never published it: it enters the list with the contract's place of publication.
+    for (const dep of facts.deployments ?? []) {
+      if (labelsOf(dep.chain, dep.contract).some((l) => ruleset.exclusions.labelCategories.includes(l.category))) continue; // an institution's contract
+      const shown = (byAddress.get(`${dep.chain}:${dep.contract}`) ?? []).filter((o) => o.placement !== 'quoted' && o.method !== 'deployer');
+      if (!shown.length) continue;
+      const key = `${dep.chain}:${dep.creator}`;
+      byAddress.set(key, [
+        ...(byAddress.get(key) ?? []),
+        ...shown.map((o): Occurrence => ({
+          ...o, method: 'deployer', obfuscation: [], raw: dep.contract, image: undefined,
+          context: `Kontrakt ${dep.contract} utworzono z tego adresu${dep.at ? ` dnia ${day(dep.at)}` : ''}${dep.txHash ? ` (transakcja ${dep.txHash.slice(0, 18)}…)` : ''}.`,
+        })),
+      ]);
+    }
+
+    // When the person publishes on the web. The hours they are never active are compared with each address's transfers.
+    const mineKeys = new Set(cluster.accounts.map((x) => `${x.origin}:${x.handle.toLowerCase()}`));
+    const webTimes = facts.documents
+      .filter((d) => d.publishedAt && d.docType !== 'profile' && d.container?.kind !== 'archive' && mineKeys.has(accountKeyOf(d) ?? ''))
+      .map((d) => d.publishedAt!);
+    const { quiet } = quietHoursOf(webTimes, ruleset);
+    const offBeat: Rhythm['conflicting'] = [];
+
     for (const [key, all] of byAddress) {
       const [chain, address] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
       const occurrences = all.sort((a, b) => PLACEMENT_ORDER.indexOf(a.placement) - PLACEMENT_ORDER.indexOf(b.placement) || a.url.localeCompare(b.url));
-      const own = occurrences.filter((o) => o.placement !== 'quoted');
+      const shownByPerson = occurrences.filter((o) => o.placement !== 'quoted');
+      // Places where the address itself stands count first; places that only lead to it through a contract are used when there are no others.
+      const derived = shownByPerson.filter((o) => o.method === 'deployer');
+      const indirect = derived.length > 0 && derived.length === shownByPerson.length;
+      const own = indirect ? shownByPerson : shownByPerson.filter((o) => o.method !== 'deployer');
       const info = accountInfo.get(key);
       const others: ClusterAccount[] = [...(publishers.get(key) ?? [])]
         .filter((k) => ids.clusterOfAccount.get(k) !== cluster.id)
@@ -128,10 +171,13 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         status = 'excluded';
         line({ ...exclusion, effect: 'exclusion', points: 0, evidence: info?.sourceUrl ? [info.sourceUrl] : [] });
         if (own.length) {
+          const made = exclusion.rule === 'X2' ? (facts.deployments ?? []).find((d) => d.chain === chain && d.contract === address) : undefined;
           line({
             rule: 'F1',
             title: 'Odnotowano wzmiankę',
-            detail: `Badana osoba sama podała ten adres (${where(own)}). To ślad korzystania z usług tego podmiotu, a nie jej portfel.`,
+            detail: made
+              ? `Badana osoba podaje ten kontrakt jako własny projekt (${where(own)}). Kontrakt nie jest portfelem, ale utworzono go z adresu ${short(made.creator)} — ten adres oceniono osobno.`
+              : `Badana osoba sama podała ten adres (${where(own)}). To ślad korzystania z usług tego podmiotu, a nie jej portfel.`,
             effect: 'info', points: null, evidence: uniq(own.map((o) => o.url)),
           });
         }
@@ -160,7 +206,7 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         total = rule.base;
         line({
           rule: rule.rule, title: rule.title, effect: 'base', points: rule.base,
-          detail: `Najsilniejsze miejsce publikacji: ${where(bestOnes)}${bestOnes[0].placementNote ? ` (${bestOnes[0].placementNote})` : ''}. Wartość wyjściowa ${rule.base}%.`,
+          detail: `${indirect ? 'Miejsce, w którym osoba podała kontrakt' : 'Najsilniejsze miejsce publikacji'}: ${where(bestOnes)}${bestOnes[0].placementNote ? ` (${bestOnes[0].placementNote})` : ''}. Wartość wyjściowa ${rule.base}%.`,
           evidence: uniq(bestOnes.map((o) => o.url)),
         });
         const weaker = own.filter((o) => o.placement !== best);
@@ -170,6 +216,31 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
             detail: `Adres występuje też w słabszych miejscach: ${uniq(weaker.map((o) => ruleset.placements[o.placement as Exclude<Placement, 'quoted'>].title.toLowerCase())).join('; ')}. Punkty nie sumują się — liczy się najsilniejsze miejsce.`,
             evidence: uniq(weaker.map((o) => o.url)),
           });
+        }
+
+        // K3: the address created a contract the person shows as their own.
+        if (derived.length) {
+          const contracts = uniq(derived.map((o) => o.raw));
+          const dep = (facts.deployments ?? []).find((d) => d.chain === chain && d.creator === address && contracts.includes(d.contract));
+          const when = dep?.at ? ` dnia ${day(dep.at)}` : '';
+          const evidence = [...uniq(derived.map((o) => o.url)), ...(dep?.sourceUrl ? [dep.sourceUrl] : [])];
+          if (indirect) {
+            const cap = ruleset.deployer.max;
+            total = Math.min(total, cap);
+            line({
+              rule: 'K3', title: 'Adres ustalony pośrednio: twórca kontraktu', effect: 'cap', points: cap,
+              detail: `Tego adresu osoba nigdzie nie podała. Podaje natomiast jako własny kontrakt ${contracts.map(short).join(', ')} (${where(derived)}), a łańcuch bloków pokazuje, że kontrakt utworzono z tego adresu${when}. Kontrakt mógł wdrożyć także współpracownik, dlatego wynik jest ograniczony do ${cap}%.`,
+              evidence,
+            });
+          } else {
+            const add = Math.min(ruleset.deployer.bonus, 100 - total);
+            total += add;
+            line({
+              rule: 'K3', title: 'Z tego adresu utworzono kontrakt osoby', effect: 'bonus', points: add,
+              detail: `Osoba podaje ten adres wprost, a niezależnie od tego podaje jako własny kontrakt ${contracts.map(short).join(', ')}, który utworzono z tego adresu${when}. Premia +${ruleset.deployer.bonus} pkt proc.`,
+              evidence,
+            });
+          }
         }
 
         // S: independent confirmation.
@@ -334,6 +405,7 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         const push = (weight: Challenge['weight'], text: string) => challenges.push({ weight, text });
         if (cluster.level === 'name_unique' || cluster.level === 'name_ambiguous') push('duże', 'Konto dopasowano wyłącznie po imieniu i nazwisku. To może być inna osoba o tym samym nazwisku.');
         if (cluster.level === 'handle_variant') push('średnie', 'Konto znaleziono po podobnym, a nie identycznym nicku, i nic więcej nie łączy go z osobą.');
+        if (indirect) push('średnie', 'Kontrakt mógł wdrożyć współpracownik albo wykonawca, a nie autor repozytorium.');
         if (best === 'discussion' && !proven) push('duże', 'We wpisie na forum autor mógł podać adres innej osoby, na przykład kontrahenta, a nie własny.');
         if (best === 'mass_comment') push('duże', 'W wątkach konkursowych ludzie wklejają adresy przypadkowe lub jednorazowe.');
         if (matches.some((m) => m.unique)) push('małe', 'Zgodność kwoty i daty może być przypadkowa, zwłaszcza przy okrągłych kwotach.');
@@ -352,6 +424,25 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         if (!proven) wouldConfirm.push('Wiadomość podpisana kluczem tego adresu, opublikowana przez konto osoby.');
         if (origins.length === 1) wouldConfirm.push('Ten sam adres na innym koncie tej osoby, w innym serwisie.');
         wouldConfirm.push('Dane giełdy lub usługi, do której trafiły środki z tego adresu.');
+
+        if (indirect) wouldConfirm.unshift('Przelew między tym adresem a innym adresem osoby.');
+
+        // R2: transfers leave this address at hours when the person is never active on the web.
+        if (quiet && !proven) {
+          const sent = outgoing(chain, address);
+          const night = sent.filter((t) => inWindow(t.at, quiet));
+          if (sent.length >= ruleset.rhythm.addressMinTransfers && night.length / sent.length >= ruleset.rhythm.conflictShare) {
+            const cut = Math.min(ruleset.rhythm.conflictPenalty, total);
+            total -= cut;
+            line({
+              rule: 'R2', title: 'Rytm doby inny niż rytm osoby', effect: 'penalty', points: cut,
+              detail: `${night.length} z ${sent.length} przelewów wychodzących z tego adresu wysłano ${windowText(quiet)}. W tych godzinach osoba nigdy nie publikuje w sieci (na podstawie ${webTimes.length} datowanych wpisów i ogłoszeń). Adresem może dysponować ktoś inny. Wynik obniżony o ${cut} pkt proc.`,
+              evidence: [],
+            });
+            challenges.unshift({ weight: 'duże', text: `Przelewy z tego adresu wychodzą w godzinach, w których osoba nie jest aktywna w sieci (${night.length} z ${sent.length}).` });
+            offBeat.push({ chain, address, transfers: sent.length, inQuiet: night.length, hours: hourHistogram(sent.map((t) => t.at)) });
+          }
+        }
 
         // T: the score can never exceed how sure we are that these accounts are the person asked about.
         if (total > cluster.identityCap) {
@@ -372,6 +463,15 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         account: info && { kind: info.kind, labels: labelsOf(chain, address), txCount: info.txCount, firstSeenAt: info.firstSeenAt, lastSeenAt: info.lastSeenAt, balances: info.balances, delegate: info.delegate },
       });
     }
+
+    // The person's rhythm as a whole: all transfers that left their addresses, against the hours they publish.
+    const skip = new Set(offBeat.map((x) => `${x.chain}:${x.address}`));
+    const sentAt = new Map<string, string>();
+    for (const l of links) {
+      if (l.clusterId !== cluster.id || l.status !== 'attributed' || skip.has(`${l.chain}:${l.address}`)) continue;
+      for (const t of outgoing(l.chain, l.address)) sentAt.set(`${l.chain}:${t.txHash}`, t.at);
+    }
+    if (webTimes.length || sentAt.size) cluster.rhythm = compareRhythm(webTimes, [...sentAt.values()], offBeat, ruleset);
   }
 
   // W2: addresses of one wallet stand or fall together. If the person published two addresses that are

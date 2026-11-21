@@ -4,9 +4,9 @@ import {
   GIVEAWAY_TITLES, HANDLE_A, HANDLE_B, KNOWN_ENTITIES, MALE_NAMES, REPO_NAMES, SPLIT_DROPS, SURNAMES, THREAD_TITLES,
 } from './data';
 import type { Ad, Archetype, CodeUser, ExpectedBand, ForumPost, ForumThread, ForumUser, Persona, Placement, Site, World } from './model';
-import { generateChain } from './chain';
+import { generateChain, skarbonkaAddress } from './chain';
 import { Rng } from './rng';
-import { makeWallet, type Wallet } from './wallet';
+import { makeWallet, sshKey, type Wallet } from './wallet';
 
 export const WORLD_NOW = '2026-11-01T12:00:00.000Z';
 
@@ -37,7 +37,7 @@ export function generateWorld(opts: WorldOptions = {}): World {
     code: { users: [], repos: [] },
     ads: { sellers: [], ads: [] },
     truth: [],
-    chain: { entities: [], txs: [], codes: {}, expected: [], wallets: [], names: [] },
+    chain: { entities: [], txs: [], codes: {}, expected: [], wallets: [], names: [], deployments: [] },
     proofs: [],
     matches: [],
     archive: {},
@@ -134,6 +134,8 @@ export function generateWorld(opts: WorldOptions = {}): World {
       email: opts.email ? p.email : undefined,
       links: opts.forumLink && p.handles.forum ? [{ label: 'Forum BitRozmowy', site: 'forum', path: `/uzytkownik/${p.handles.forum}` }] : [],
       readme: [{ text: `Cześć, tu ${handle}. ${rng.pick(DEV_BIOS)}` }],
+      avatarEmail: p.email,
+      sshKeys: [sshKey(`${seed}|${p.id}`, `${handle}@dom`)],
     };
     if (withAddresses) {
       const btc = wallet(p, 'btc-segwit');
@@ -415,6 +417,59 @@ export function generateWorld(opts: WorldOptions = {}): World {
     const fu = forumUser(namesake, { displayName: namesake.fullName, location: 'Radom' });
     setSignature(fu, namesake, wallet(namesake, 'btc-segwit'));
     post(discussionThreads[3], fu.handle, 'Rozliczam wszystko co do złotówki, polecam prowadzić arkusz od pierwszej transakcji.');
+  }
+
+  // ---------- added after everything else, so earlier content keeps its values ----------
+  {
+    // The subject's work account on the code host: his usual nick with a suffix, and no name, e-mail or link on it.
+    // Two things give it away. Its avatar is addressed by the hash of his e-mail, and it uses the SSH key of his main account.
+    const main = world.code.users.find((u) => u.handle === hero.handles.code)!;
+    const labs: CodeUser = {
+      handle: 'szklanedomy-labs', personaId: hero.id, bio: 'Kontrakty i automaty. Konto robocze.', links: [],
+      readme: [{ text: 'Repozytoria robocze. Kontakt tylko przez zgłoszenia.' }], avatarEmail: hero.email, sshKeys: [...main.sshKeys!],
+    };
+    world.code.users.push(labs);
+    usedHandles.add(labs.handle);
+    // Its repository names a contract. He never published the address that created it.
+    wallet(hero, 'eth', 'deployer');
+    const skarbonka = skarbonkaAddress(seed);
+    world.code.repos.push({
+      owner: labs.handle, name: 'skarbonka', description: 'Kontrakt skarbonki z wypłatą po terminie', updatedAt: '2025-03-04T19:12:00.000Z',
+      readme: `# skarbonka\n\nProsty kontrakt: wpłaty w ETH, wypłata po terminie.\n\nWdrożony w sieci Ethereum pod adresem ${skarbonka}\nKod źródłowy w katalogu contracts/.`,
+    });
+    place({ address: skarbonka, chain: 'ethereum', site: 'code', path: `/${labs.handle}/skarbonka`, resourceId: `repo:${labs.handle}/skarbonka`, where: 'repo', postedBy: hero.id, ownerPersonaId: null, entity: { name: 'Skarbonka', kind: 'contract' }, expected: 'excluded' });
+
+    // Someone else with a similar nick on the same site. Nothing confirms him: other e-mail hash, other key.
+    const other: Persona = { id: 'krk', fullName: 'Szymon Połaniecki', city: 'Kraków', email: 'biuro@szklanedomy-krk.test', phone: '+48 512 400 700', archetype: 'scripted', handles: { code: 'szklanedomy-krk' }, wallets: [] };
+    world.personas.push(other);
+    usedHandles.add(other.handles.code!);
+    const otherBtc = wallet(other, 'btc-segwit');
+    world.code.users.push({
+      handle: other.handles.code!, personaId: other.id, bio: 'Sterowniki do szklarni i ogrodów zimowych.', location: 'Kraków', links: [],
+      readme: [{ text: 'Automatyka szklarni: czujniki, nawadnianie, wentylacja.' }, { text: `Wsparcie projektu, BTC: ${otherBtc.address}` }],
+      avatarEmail: other.email, sshKeys: [sshKey(`${seed}|${other.id}`, 'szymon@warsztat')],
+    });
+    place({ address: otherBtc.address, chain: 'bitcoin', site: 'code', path: `/${other.handles.code}`, resourceId: `user:${other.handles.code}`, where: 'profile', postedBy: other.id, ownerPersonaId: other.id, expected: 'very_high' });
+
+    // The subject once posted a friend's address. The friend lives nine time zones away.
+    const friend: Persona = { id: 'kolega', fullName: 'Marek Wokulski', city: 'Vancouver', email: 'marek@daleko.test', phone: '+1 604 555 0142', archetype: 'scripted', handles: {}, wallets: [] };
+    world.personas.push(friend);
+    const friendBtc = wallet(friend, 'btc-segwit');
+    const t = discussionThreads[4];
+    const fp = post(t, hero.handles.forum!, `Kolega z Vancouver wyprzedaje koparki, płatność w BTC na jego adres: ${friendBtc.address} Ja tylko pośredniczę w kontakcie.`, undefined, '2025-04-06T19:25:00.000Z');
+    place({ address: friendBtc.address, chain: 'bitcoin', site: 'forum', path: postPath(t, fp), resourceId: `post:${fp.id}`, where: 'discussion', postedBy: hero.id, ownerPersonaId: friend.id, expected: 'noise' });
+
+    // The subject keeps regular hours: nothing of his is ever published in the small hours.
+    const awake = (iso: string, salt: number) => {
+      const d = new Date(iso);
+      if (d.getUTCHours() >= 7 && d.getUTCHours() <= 21) return iso;
+      d.setUTCHours(17 + (salt % 4));
+      return d.toISOString();
+    };
+    const his = new Set([hero.handles.forum, 'nocny_kantor']);
+    for (const th of world.forum.threads) for (const p of th.posts) if (his.has(p.author)) p.at = awake(p.at, p.id);
+    for (const a of world.ads.ads) if (a.seller === hero.handles.ads || a.seller === 'eth_od_reki') a.at = awake(a.at, a.id);
+    for (const r of world.code.repos) if (r.owner === hero.handles.code) r.updatedAt = awake(r.updatedAt, r.name.length);
   }
 
   for (const t of world.forum.threads) t.posts.sort((a, b) => a.at.localeCompare(b.at));

@@ -1,8 +1,14 @@
+import { md5 } from '@noble/hashes/legacy.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 
 export function sha256Hex(data: Uint8Array | string): string {
   return bytesToHex(sha256(typeof data === 'string' ? utf8ToBytes(data) : data));
+}
+
+/** MD5 is used only to compare with hashes that sites themselves publish (avatar services), never for integrity. */
+export function md5Hex(data: Uint8Array | string): string {
+  return bytesToHex(md5(typeof data === 'string' ? utf8ToBytes(data) : data));
 }
 
 export const GENESIS_HASH = '0'.repeat(64);

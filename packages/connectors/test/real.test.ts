@@ -73,6 +73,36 @@ describe('GitHub connector', () => {
   });
 });
 
+describe('signals from live sources', () => {
+  it('GitHub: logins that contain the nick, and the fingerprints of an account\'s public keys', async () => {
+    const api = 'https://api.github.com';
+    const key = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl';
+    const { ctx, asked } = fakeNet({
+      [`${api}/search/users`]: { items: [{ login: 'devka' }, { login: 'devka-labs' }, { login: 'DevkaTools' }] },
+      [`${api}/users/devka-labs/keys`]: [{ id: 1, key }],
+      [`${api}/users/devka-labs/repos`]: [],
+      [`${api}/users/devka-labs`]: { login: 'devka-labs', type: 'User', name: null, bio: null, blog: null, email: null, location: null, twitter_username: null, html_url: 'https://github.com/devka-labs', created_at: '2024-01-01T00:00:00Z' },
+    });
+    const gh = createGithubConnector();
+    expect(await gh.enumerate!(makeIdentifier('username', 'devka'), ctx)).toEqual(['devka-labs', 'DevkaTools']);
+    expect(asked[0].url).toContain(encodeURIComponent('devka in:login'));
+    expect(await gh.enumerate!(makeIdentifier('username', 'ab'), ctx)).toEqual([]); // too short to mean anything
+
+    const [profile] = await collect(gh.search(makeIdentifier('username', 'devka-labs'), ctx));
+    expect(profile.fingerprints).toEqual([{ kind: 'ssh_key', value: expect.stringMatching(/^SHA256:/), sourceUrl: 'https://github.com/devka-labs.keys' }]);
+  });
+
+  it('Ethereum: asks an indexer which address created a contract, when one is configured', async () => {
+    const rpc = 'https://node.example/rpc';
+    const creator = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+    const { ctx } = fakeNet({ 'https://indexer.example/api/v2/addresses/': { creator_address_hash: creator.toLowerCase(), creation_transaction_hash: '0xabc' } });
+    expect(createEvmRpcConnector(rpc).getCreator).toBeUndefined();
+    const evm = createEvmRpcConnector(rpc, { indexer: 'https://indexer.example/' });
+    expect(evm.descriptor.hosts).toEqual(['node.example', 'indexer.example']);
+    expect(await evm.getCreator!('ethereum', '0xdAC17F958D2ee523a2206206994597C13D831ec7', ctx)).toMatchObject({ contract: '0xdAC17F958D2ee523a2206206994597C13D831ec7', creator, txHash: '0xabc' });
+  });
+});
+
 describe('Bitcoin explorer connector', () => {
   const tx = (txid: string, time: number, vin: [string, number][], vout: [string, number][]) => ({
     txid, status: { confirmed: true, block_time: time },
