@@ -1,0 +1,54 @@
+# Whole stack on one machine, no public cloud: PostgreSQL, the synthetic test environment and the API.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: olcys
+      POSTGRES_PASSWORD: olcys
+      POSTGRES_DB: olcys
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U olcys"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Three fictional sites (forum, code hosting, P2P ads) filled with synthetic personas.
+  world:
+    build: .
+    command: ["npm", "run", "world"]
+    environment:
+      WORLD_HOST: 0.0.0.0
+      WORLD_PUBLIC_HOST: world
+    ports:
+      - "4101:4101"
+      - "4102:4102"
+      - "4103:4103"
+      - "4104:4104"
+      - "4105:4105"
+      - "4106:4106"
+
+  api:
+    build: .
+    command: ["npm", "run", "api"]
+    environment:
+      DATABASE_URL: postgres://olcys:olcys@db:5432/olcys
+      WORLD_FORUM_URL: http://world:4101
+      WORLD_CODE_URL: http://world:4102
+      WORLD_ADS_URL: http://world:4103
+      WORLD_EXPLORER_URL: http://world:4104
+      NBP_API_URL: http://world:4105
+      PRICES_URL: http://world:4105
+      ARCHIVE_URL: http://world:4106
+      API_HOST: 0.0.0.0
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      world:
+        condition: service_started
+
+volumes:
+  pgdata:

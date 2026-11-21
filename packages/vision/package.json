@@ -1,0 +1,9 @@
+{
+  "name": "@olcys/vision",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "jsqr": "^1.4.0", "pngjs": "^7.0.0", "jpeg-js": "^0.4.4" },
+  "devDependencies": { "@types/pngjs": "^6.0.5" }
+}

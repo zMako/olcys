@@ -1,0 +1,16 @@
+{
+  "name": "@olcys/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@olcys/core": "*",
+    "@olcys/db": "*",
+    "@olcys/connectors": "*",
+    "@olcys/scoring": "*",
+    "@olcys/vision": "*"
+  }
+}

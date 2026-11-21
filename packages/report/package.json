@@ -1,0 +1,14 @@
+{
+  "name": "@olcys/report",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@olcys/core": "*",
+    "@olcys/engine": "*",
+    "@olcys/scoring": "*",
+    "@fontsource/brygada-1918": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0"
+  }
+}

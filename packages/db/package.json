@@ -1,0 +1,8 @@
+{
+  "name": "@olcys/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@olcys/core": "*", "@electric-sql/pglite": "^0.5.17", "pg": "^8.23.0" }
+}

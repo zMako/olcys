@@ -1,0 +1,21 @@
+{
+  "name": "@olcys/world",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@olcys/core": "*",
+    "@scure/base": "^2.4.0",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5",
+    "@types/qrcode": "^1.5.6"
+  }
+}
