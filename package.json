@@ -21,7 +21,9 @@
     "api": "tsx apps/api/src/server.ts",
     "web": "npm run dev -w @olcys/web",
     "web:build": "npm run build -w @olcys/web",
-    "check:ui": "node scripts/live-check.mjs"
+    "check:ui": "node scripts/live-check.mjs",
+    "corpus": "tsx packages/corpus/src/cli.ts",
+    "reader": "tsx packages/reader/src/cli.ts"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

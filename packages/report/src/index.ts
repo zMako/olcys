@@ -1,5 +1,7 @@
 import type { Transfer } from '@olcys/core';
 import type { RunDiff, RunSummary } from '@olcys/engine';
+
+export { caseFacts } from './facts';
 import { draftRequest, formatAmount, formatPln, type Link } from '@olcys/scoring';
 import { embeddedFonts } from './fonts';
 
@@ -204,6 +206,28 @@ export function renderReport(input: ReportInput): string {
       }</tbody></table>`);
       if (q) out.push('<p class="small">Szare kolumny to godziny, w których osoba nie publikuje w sieci. Zgodność rytmu nie dodaje punktów, bo podobny rytm ma wiele osób; przelewy w tych godzinach obniżają wynik adresu (reguła R2).</p>');
     }
+  }
+
+  // ---- what the person wrote about their own crypto
+  if (s.reading) {
+    out.push(h2(++n, 'Co osoba sama napisała o swoich kryptowalutach', 'O'));
+    out.push(`<p>Przeczytano ${s.reading.posts} wpisów i ogłoszeń z kont osoby. ${s.reading.generated} z nich napisały aplikacje (gotowe komunikaty, powtarzane słowo w słowo) i pominięto je. Pozostałe oceniono modelem działającym na tej maszynie; poniżej te, w których autor najpewniej mówi o własnych transakcjach lub stanie posiadania.</p>`);
+    if (s.reading.statements.length) {
+      out.push(table(['Data', 'Wpis', 'Trafność', 'Odczytanie przez model językowy'], s.reading.statements.map((x) => [
+        x.at ? x.at.slice(0, 10) : '—',
+        `${esc(x.text.replace(/\s+/g, ' ').slice(0, 320))}${x.url ? `<br><a href="${esc(x.url)}">${esc(x.url)}</a>` : ''}`,
+        `${Math.round(x.relevance * 100)}%`,
+        !x.detail ? '<i>nie czytano</i>'
+          : x.detail.concernsAuthor ? `${esc(x.detail.kind)}${x.detail.amount ? ` ${x.detail.amount}` : ''}${x.detail.asset ? ` ${esc(x.detail.asset)}` : ''}${x.detail.when ? `, ${esc(x.detail.when)}` : ''}<br><span class="small">${esc(x.detail.reason)} (${esc(x.detail.model)})</span>`
+          : `<i>nie dotyczy własnych transakcji autora</i><br><span class="small">${esc(x.detail.reason)}</span>`,
+      ])));
+    } else out.push('<p>Żaden wpis nie wygląda na wypowiedź o własnych kryptowalutach.</p>');
+    out.push('<p class="small">Wypowiedź jest wskazówką, gdzie szukać, a nie dowodem transakcji. Nie wpływa na Wskaźnik Pewności.</p>');
+  }
+  if (s.narrative) {
+    out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
+    out.push(`<div class="notice">${esc(s.narrative.text).replace(/\n+/g, '<br>')}</div>`);
+    out.push(`<p class="small">Tekst wygenerował model ${esc(s.narrative.model)} działający na tej maszynie, wyłącznie z ustaleń zawartych w tym raporcie (${minute(s.narrative.createdAt)} UTC). Może zawierać błędy; rozstrzygają ustalenia i źródła, nie ten opis.</p>`);
   }
 
   // ---- profiles over time

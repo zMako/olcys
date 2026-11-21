@@ -61,6 +61,8 @@ export interface ProofFact {
   message: string;
   valid: boolean;
   reason?: string;
+  /** Set when the signature was checked by a service (e.g. Keybase) rather than by this tool. */
+  attestedBy?: string;
 }
 
 export interface MentionFact {

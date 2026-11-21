@@ -155,3 +155,44 @@ describe('daily rhythm', () => {
     expect(s.estimate!.leftOut.find((x) => x.address === friend)).toMatchObject({ score: 35 });
   });
 });
+
+describe('reading what the person wrote', () => {
+  // A stand-in reader: the real one needs a model file; the engine only needs something that answers the same question.
+  const reader = (fail = false) => ({
+    seen: [] as { id: string; text: string }[],
+    async triage(posts: { id: string; text: string; at?: string; url?: string }[]) {
+      if (fail) throw new Error('model not available');
+      this.seen = posts;
+      const statements = posts.filter((p) => /Sprzedam|Skupuję/.test(p.text)).map((p) => ({ id: p.id, relevance: 0.9, text: p.text, at: p.at, url: p.url }));
+      return { posts: posts.length, generated: 0, read: posts.length, statements };
+    },
+  });
+
+  it('reads the posts and ads of the person\'s own accounts only, and keeps what was found with its source', async () => {
+    const r = reader();
+    const s = await analyze('username', 'szklane_domy', { ...deps, reader: r });
+    expect(s.status).toBe('completed');
+    expect(s.reading).toMatchObject({ posts: r.seen.length, generated: 0 });
+    const texts = s.reading!.statements.map((x) => x.text);
+    expect(texts.some((t) => t.includes('Skupuję i sprzedaję BTC bez prowizji'))).toBe(true); // the unlinked forum account, found through the chain
+    expect(texts.some((t) => t.includes('Sprzedam ETH za gotówkę'))).toBe(true); // the ad of the third account
+    expect(s.reading!.statements.every((x) => x.url && x.relevance === 0.9)).toBe(true);
+    // nothing written by the look-alike account, the namesake or strangers is read
+    const mine = new Set(clusterOf(s, 'szklane_domy').accounts.map((a) => a.handle));
+    expect(mine.has('szklanedomy-krk')).toBe(false);
+    expect(r.seen.some((p) => p.text.includes('Rozliczam wszystko co do złotówki'))).toBe(false); // the namesake's post
+    const events = await store.events<{ statements?: number }>(s.runId);
+    expect(events.find((e) => e.type === 'reading')).toMatchObject({ statements: s.reading!.statements.length });
+    expect(events.filter((e) => e.type === 'statement')).toHaveLength(s.reading!.statements.length);
+    // the language model's reading is stored next to the statement when it arrives
+    await store.setStatementDetail(s.runId, s.reading!.statements[0].documentId, { concernsAuthor: true, kind: 'oferta', reason: 'x', model: 'test' });
+    expect((await store.reading<{ kind: string }>(s.runId))!.statements.find((x) => x.detail)!.detail).toMatchObject({ kind: 'oferta' });
+  });
+
+  it('a reader that fails does not fail the analysis', async () => {
+    const s = await analyze('username', 'szklane_domy', { ...deps, reader: reader(true) });
+    expect(s.status).toBe('completed');
+    expect(s.reading).toBeUndefined();
+    expect(s.estimate!.totalPln).toBeGreaterThan(0);
+  });
+});

@@ -75,6 +75,10 @@ export function describe(e: StoredRunEvent): string {
       return `${sourceName(e.source)}: ${DOC[e.docType] ?? e.docType}${e.handle ? ` użytkownika ${e.handle}` : ''}${e.relation === 'mention' ? ' (obce konto)' : ''}.`;
     case 'hit':
       return `Trop „${e.via.value}” prowadzi do znanego już dokumentu.`;
+    case 'reading':
+      return `Przeczytano wpisy osoby: ${e.posts}, z czego ${e.generated} napisały aplikacje. Wypowiedzi o własnych kryptowalutach: ${e.statements}.`;
+    case 'statement':
+      return `Osoba pisze o własnych kryptowalutach: „${e.text.slice(0, 110)}${e.text.length > 110 ? '…' : ''}”`;
     case 'deployment':
       return `Kontrakt ${shortAddress(e.contract)} utworzono z adresu ${shortAddress(e.creator)}. Tego adresu osoba nigdzie nie podała.`;
     case 'address':

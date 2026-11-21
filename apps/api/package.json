@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@olcys/core": "*", "@olcys/db": "*", "@olcys/connectors": "*", "@olcys/engine": "*", "@olcys/scoring": "*", "@olcys/report": "*", "playwright": "^1.65.0", "fastify": "^5.12.0", "zod": "^4.6.0" }
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@olcys/core": "*",
+    "@olcys/db": "*",
+    "@olcys/connectors": "*",
+    "@olcys/engine": "*",
+    "@olcys/scoring": "*",
+    "@olcys/report": "*",
+    "playwright": "^1.65.0",
+    "fastify": "^5.12.0",
+    "zod": "^4.6.0",
+    "@olcys/reader": "*",
+    "@olcys/corpus": "*"
+  }
 }

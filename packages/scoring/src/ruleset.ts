@@ -17,8 +17,11 @@ export interface Ruleset {
   synergy: { rule: string; points: number; minOrigins: number };
   obfuscation: { rule: string; points: number };
   identityCaps: Record<Exclude<ClusterLevel, 'third_party'>, number>;
-  /** A valid signed message that names the account sets the score to 100. One that does not name it adds `unboundPoints`, up to `unboundMax`. */
-  proof: { unboundPoints: number; unboundMax: number };
+  /**
+   * A valid signed message that names the account sets the score to 100. One that does not name it adds `unboundPoints`, up to `unboundMax`.
+   * A signed statement that a service vouches for, but this tool did not verify itself, raises the score to at least `attestedMin`.
+   */
+  proof: { unboundPoints: number; unboundMax: number; attestedMin: number };
   exclusions: {
     /** Label categories that can never be a person's private wallet. */
     labelCategories: LabelCategory[];
@@ -60,7 +63,7 @@ export interface Ruleset {
 
 export const DEFAULT_RULESET: Ruleset = {
   id: 'olcys-kas',
-  version: '1.1.0',
+  version: '1.2.0',
   name: 'Metoda KAS z kontrolą tożsamości',
   bands: [
     { id: 'very_high', label: 'BARDZO WYSOKIE', min: 80 },
@@ -77,7 +80,7 @@ export const DEFAULT_RULESET: Ruleset = {
   synergy: { rule: 'S1', points: 15, minOrigins: 2 },
   obfuscation: { rule: 'O1', points: 3 },
   identityCaps: { entered: 100, publisher: 100, handle_variant: 79, name_unique: 59, handle_similar: 49, name_ambiguous: 39 },
-  proof: { unboundPoints: 30, unboundMax: 95 },
+  proof: { unboundPoints: 30, unboundMax: 95, attestedMin: 95 },
   exclusions: {
     labelCategories: ['exchange', 'exchange_deposit', 'p2p', 'payment_gateway', 'card', 'otc', 'dex', 'token', 'contract', 'mixer', 'charity', 'bridge'],
     contractCode: true,

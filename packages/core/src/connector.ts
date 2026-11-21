@@ -33,6 +33,19 @@ export interface FetchedResource {
   fetchedAt: string;
 }
 
+/** A signed statement, published with a profile, that ties an address to the account. */
+export interface Attestation {
+  chain: string;
+  address: string;
+  /** What was signed, in words that name the account. */
+  message: string;
+  signature: string;
+  valid: boolean;
+  reason?: string;
+  /** Absent when this tool checked the signature itself; otherwise the service that vouches for it. */
+  attestedBy?: string;
+}
+
 /** One attributable unit of content: a profile, a single post, an ad. */
 export interface SourceItem {
   snapshotId: string;
@@ -54,6 +67,8 @@ export interface SourceItem {
   discovered: Identifier[];
   /** Hashes and key fingerprints the profile shows (avatar e-mail hash, public keys). They identify the owner without naming them. */
   fingerprints?: Fingerprint[];
+  /** Signed statements tying addresses to the account (wallet claims, key-signed address lists). */
+  attestations?: Attestation[];
 }
 
 /** Extras for a request. Headers are sent but never stored, so access tokens do not end up in the evidence vault. */
@@ -82,6 +97,12 @@ export interface ConnectorDescriptor {
   hosts: string[];
   /** True for the built-in test environment. */
   synthetic: boolean;
+  /**
+   * True when an archived copy of a profile page holds only the account's own content, so addresses found in it
+   * can be attributed to the account. False for sites whose profile pages also show other people's posts:
+   * there an archived page proves nothing about who an address belongs to.
+   */
+  archivable?: boolean;
 }
 
 /** A Web2 source. Adding a source = implementing this interface and registering it. */

@@ -201,6 +201,15 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 @keyframes print { from { opacity: 0; transform: translateY(-5px); } }
 @keyframes stamp { from { opacity: 0; transform: rotate(-5deg) scale(1.7); } }
 
+/* ---------- what the person wrote */
+.statements { margin: 8px 0; }
+.statements li { padding: 8px 0 8px 12px; border-left: 3px solid var(--line-strong); margin: 8px 0; }
+.statements q { display: block; quotes: '„' '”'; font-size: 15px; }
+.statements li.dismissed { opacity: 0.55; }
+.statements li.dismissed q { text-decoration: line-through; text-decoration-color: var(--ink-3); }
+.narrative { white-space: pre-wrap; padding: 10px 12px; background: #fff; border: 1px solid var(--line); }
+.case-controls button:disabled { opacity: 0.6; cursor: progress; }
+
 /* ---------- daily rhythm */
 .rhythm { margin: 4px 0 12px; }
 .rhythm-label { margin-top: 8px; font-size: 13.5px; color: var(--ink-2); }

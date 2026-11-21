@@ -312,9 +312,9 @@ export class Store {
     );
   }
 
-  async saveProof(runId: string, documentId: string, p: { chain: string; address: string; message: string; signature: string; valid: boolean; reason?: string }): Promise<void> {
-    await this.db.query('INSERT INTO proofs (run_id, document_id, chain, address, message, signature, valid, reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
-      runId, documentId, p.chain, p.address, p.message, p.signature, p.valid, p.reason ?? null,
+  async saveProof(runId: string, documentId: string, p: { chain: string; address: string; message: string; signature: string; valid: boolean; reason?: string; attestedBy?: string }): Promise<void> {
+    await this.db.query('INSERT INTO proofs (run_id, document_id, chain, address, message, signature, valid, reason, attested_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [
+      runId, documentId, p.chain, p.address, p.message, p.signature, p.valid, p.reason ?? null, p.attestedBy ?? null,
     ]);
   }
 
@@ -375,6 +375,61 @@ export class Store {
         [runId, subject, t.chain, t.txHash, t.at, t.from, t.to, t.asset, t.amount, t.snapshotId ?? null],
       );
     }
+  }
+
+  // ------------------------------------------------------------------ what the person's posts say
+
+  /** Text of everything the run captured that was written by someone (posts and ads), for reading. */
+  async authoredTexts(runId: string): Promise<{ documentId: string; origin: string; authorHandle: string; url: string; at?: string; text: string }[]> {
+    const { rows } = await this.db.query<Record<string, any>>(
+      `SELECT id, origin, author_handle, url, published_at, segments FROM documents
+        WHERE run_id = $1 AND doc_type IN ('post', 'ad') AND author_handle IS NOT NULL ORDER BY published_at NULLS LAST, id`,
+      [runId],
+    );
+    return rows.map((r) => ({
+      documentId: r.id as string, origin: r.origin as string, authorHandle: r.author_handle as string, url: r.url as string, at: (r.published_at ?? undefined) as string | undefined,
+      // the author's own words only: quoted text belongs to someone else
+      text: ((r.segments ?? []) as { kind: string; text: string }[]).filter((x) => x.kind === 'title' || x.kind === 'body').map((x) => x.text).join('\n').trim(),
+    }));
+  }
+
+  async saveReading(
+    runId: string,
+    r: { posts: number; generated: number; read: number; model?: unknown; statements: { documentId: string; relevance: number; text: string; at?: string; url?: string }[] },
+  ): Promise<void> {
+    await this.db.query(
+      'INSERT INTO readings (run_id, posts, generated, read, model) VALUES ($1, $2, $3, $4, $5::jsonb) ON CONFLICT (run_id) DO UPDATE SET posts = EXCLUDED.posts, generated = EXCLUDED.generated, read = EXCLUDED.read, model = EXCLUDED.model',
+      [runId, r.posts, r.generated, r.read, json(r.model)],
+    );
+    for (const x of r.statements) {
+      await this.db.query(
+        'INSERT INTO statements (run_id, document_id, relevance, text, at, url) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (run_id, document_id) DO NOTHING',
+        [runId, x.documentId, x.relevance, x.text, x.at ?? null, x.url ?? null],
+      );
+    }
+  }
+
+  async reading<D = unknown>(runId: string): Promise<{ posts: number; generated: number; read: number; statements: { documentId: string; relevance: number; text: string; at?: string; url?: string; detail?: D }[] } | undefined> {
+    const head = (await this.db.query<{ posts: number; generated: number; read: number }>('SELECT posts, generated, read FROM readings WHERE run_id = $1', [runId])).rows[0];
+    if (!head) return undefined;
+    const { rows } = await this.db.query<Record<string, any>>('SELECT document_id, relevance, text, at, url, detail FROM statements WHERE run_id = $1 ORDER BY relevance DESC, id', [runId]);
+    return {
+      posts: head.posts, generated: head.generated, read: head.read,
+      statements: rows.map((r) => ({ documentId: r.document_id as string, relevance: Number(r.relevance), text: r.text as string, at: r.at ?? undefined, url: r.url ?? undefined, detail: (r.detail ?? undefined) as D | undefined })),
+    };
+  }
+
+  async setStatementDetail(runId: string, documentId: string, detail: unknown): Promise<void> {
+    await this.db.query('UPDATE statements SET detail = $3::jsonb WHERE run_id = $1 AND document_id = $2', [runId, documentId, json(detail)]);
+  }
+
+  async saveNarrative(runId: string, model: string, text: string): Promise<void> {
+    await this.db.query('INSERT INTO narratives (run_id, model, text) VALUES ($1, $2, $3) ON CONFLICT (run_id) DO UPDATE SET model = EXCLUDED.model, text = EXCLUDED.text, created_at = now()', [runId, model, text]);
+  }
+
+  async narrative(runId: string): Promise<{ model: string; text: string; createdAt: string } | undefined> {
+    const r = (await this.db.query<{ model: string; text: string; created_at: string | Date }>('SELECT model, text, created_at FROM narratives WHERE run_id = $1', [runId])).rows[0];
+    return r && { model: r.model, text: r.text, createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at) };
   }
 
   async saveDeployment(runId: string, d: Deployment): Promise<void> {
@@ -464,12 +519,13 @@ export class Store {
       imageUrl: opt<string>(r.source_url), imageSnapshotId: opt<string>(r.source_snapshot_id),
     }));
     const proofs = (
-      await this.db.query<Record<string, any>>('SELECT document_id, chain, address, message, valid, reason FROM proofs WHERE run_id = $1 ORDER BY address, document_id', [runId])
-    ).rows.map((r) => ({ documentId: r.document_id as string, chain: r.chain as string, address: r.address as string, message: r.message as string, valid: r.valid as boolean, reason: opt<string>(r.reason) }));
+      await this.db.query<Record<string, any>>('SELECT document_id, chain, address, message, valid, reason, attested_by FROM proofs WHERE run_id = $1 ORDER BY address, document_id', [runId])
+    ).rows.map((r) => ({ documentId: r.document_id as string, chain: r.chain as string, address: r.address as string, message: r.message as string, valid: r.valid as boolean, reason: opt<string>(r.reason), attestedBy: opt<string>(r.attested_by) }));
     // Readable names of the sources ("BitRozmowy"), keyed by independence group.
     const sources: Record<string, string> = {};
     for (const c of ((run.params as { connectors?: { name: string; origin?: string }[] }).connectors ?? [])) {
-      if (c.origin) sources[c.origin] = c.name.replace(/\s*\(.*\)\s*$/, '');
+      // several connectors may read one service (the live one and a local index of it): the first one names it
+      if (c.origin && !sources[c.origin]) sources[c.origin] = c.name.replace(/\s*\(.*\)\s*$/, '');
     }
     const wallets = (await this.activities<{ chain: string; address: string; wallet: { address: string; via?: { txHash: string; with: string } }[] }>(runId))
       .map((a) => ({ chain: a.chain, root: a.address, members: a.wallet }));

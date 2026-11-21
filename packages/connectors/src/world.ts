@@ -121,7 +121,7 @@ export function createForumConnector(base: string): SourceConnector {
 
   return {
     id: 'world-forum',
-    descriptor: { name: 'BitRozmowy (forum, środowisko testowe)', kind: 'forum', origin: 'bitrozmowy', hosts: [hostOf(base)], synthetic: true },
+    descriptor: { name: 'BitRozmowy (forum, środowisko testowe)', kind: 'forum', origin: 'bitrozmowy', hosts: [hostOf(base)], synthetic: true, archivable: true },
     supports: (id) => ['username', 'full_name', 'crypto_address'].includes(id.kind) || pathOn(base, id)?.[0] === 'uzytkownik',
     async *search(id, ctx) {
       const path = pathOn(base, id);
@@ -227,7 +227,7 @@ export function createCodeConnector(base: string): SourceConnector {
 
   return {
     id: 'world-code',
-    descriptor: { name: 'Kodownia (repozytoria, środowisko testowe)', kind: 'code_hosting', origin: 'kodownia', hosts: [hostOf(base)], synthetic: true },
+    descriptor: { name: 'Kodownia (repozytoria, środowisko testowe)', kind: 'code_hosting', origin: 'kodownia', hosts: [hostOf(base)], synthetic: true, archivable: true },
     supports: (id) => ['username', 'full_name', 'email', 'crypto_address'].includes(id.kind) || pathOn(base, id)?.length === 1,
     async *search(id, ctx) {
       const path = pathOn(base, id);
@@ -308,7 +308,7 @@ export function createAdsConnector(base: string): SourceConnector {
 
   return {
     id: 'world-ads',
-    descriptor: { name: 'Bazarek P2P (ogłoszenia, środowisko testowe)', kind: 'marketplace', origin: 'bazarek', hosts: [hostOf(base)], synthetic: true },
+    descriptor: { name: 'Bazarek P2P (ogłoszenia, środowisko testowe)', kind: 'marketplace', origin: 'bazarek', hosts: [hostOf(base)], synthetic: true, archivable: true },
     supports: (id) => ['username', 'email', 'phone', 'crypto_address'].includes(id.kind) || pathOn(base, id)?.[0] === 'sprzedawca',
     async *search(id, ctx) {
       const path = pathOn(base, id);

@@ -2,7 +2,8 @@ import Fastify from 'fastify';
 import { z } from 'zod';
 import { guessIdentifier, makeIdentifier } from '@olcys/core';
 import { beginRun, diffRuns, reassessRun, startScheduler, summarizeRun } from '@olcys/engine';
-import { renderReport } from '@olcys/report';
+import { caseFacts, renderReport } from '@olcys/report';
+import { StatementReader, createOllamaClient, llmAvailable, narrate, readWithLlm } from '@olcys/reader';
 import { DEFAULT_RULESET, type Ruleset } from '@olcys/scoring';
 import { loadRuntime } from './config';
 
@@ -19,8 +20,19 @@ const StartRun = z.object({ maxDepth: z.number().int().min(0).max(6).optional(),
 const Sources = z.object({ sources: Mode });
 
 const rt = await loadRuntime();
+// The reader of posts: a classifier trained on real posts, running here. Loaded on first use (the model takes a few seconds).
+let readerLoading: Promise<StatementReader | undefined> | undefined;
+const reader = {
+  triage: async (posts: Parameters<StatementReader['triage']>[0], opts?: Parameters<StatementReader['triage']>[1]) => {
+    const r = await (readerLoading ??= StatementReader.load().catch(() => undefined));
+    return r ? r.triage(posts, opts) : { posts: posts.length, generated: 0, read: 0, statements: [] };
+  },
+};
+// The language model: a second reader and the author of the case description. Served locally; swappable through LLM_URL and LLM_MODEL.
+const llm = createOllamaClient();
+
 /** Engine dependencies for the chosen set of sources. */
-const depsFor = (mode?: 'synthetic' | 'live') => ({ store: rt.store, ...rt.sets[mode ?? rt.defaultMode], log: (m: string) => app.log.debug(m) });
+const depsFor = (mode?: 'synthetic' | 'live') => ({ store: rt.store, ...rt.sets[mode ?? rt.defaultMode], reader: process.env.READER === 'off' ? undefined : reader, log: (m: string) => app.log.debug(m) });
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
 
 app.setErrorHandler((err, _req, reply) => {
@@ -124,6 +136,31 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/reassess', async (req, reply
 app.get<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
   if (!(await rt.store.getRun(req.params.id))) return reply.status(404).send({ error: 'not_found' });
   return summarizeRun(rt.store, req.params.id);
+});
+
+// Is a language model being served, and which one?
+app.get('/api/llm', async () => ({ available: await llmAvailable(), model: llm.name }));
+
+// The language model reads the posts the classifier picked out, one by one, and records what it found.
+app.post<{ Params: { id: string } }>('/api/runs/:id/read', async (req, reply) => {
+  const reading = await rt.store.reading(req.params.id);
+  if (!reading) return reply.status(404).send({ error: 'no_reading' });
+  if (!(await llmAvailable())) return reply.status(503).send({ error: 'llm_unavailable' });
+  for (const s of reading.statements.filter((x) => !x.detail)) {
+    const detail = await readWithLlm(llm, { text: s.text, at: s.at });
+    if (detail) await rt.store.setStatementDetail(req.params.id, s.documentId, detail);
+  }
+  return { reading: await rt.store.reading(req.params.id) };
+});
+
+// The language model describes the case — from the findings of the run and nothing else.
+app.post<{ Params: { id: string } }>('/api/runs/:id/narrative', async (req, reply) => {
+  if (!(await rt.store.getRun(req.params.id))) return reply.status(404).send({ error: 'not_found' });
+  if (!(await llmAvailable())) return reply.status(503).send({ error: 'llm_unavailable' });
+  const facts = caseFacts(await summarizeRun(rt.store, req.params.id));
+  const text = await narrate(llm, facts);
+  await rt.store.saveNarrative(req.params.id, llm.name, text);
+  return { narrative: await rt.store.narrative(req.params.id), facts };
 });
 
 app.get<{ Params: { id: string } }>('/api/runs/:id/evidence', async (req, reply) => {

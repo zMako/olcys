@@ -40,6 +40,9 @@ export type RunEvent =
   | { type: 'estimate'; totalPln: number; years: { year: number; probablePln: number; possiblePln: number; totalPln: number }[] }
   /** The explorer says which address created a contract. */
   | { type: 'deployment'; chain: string; contract: string; creator: string; txHash?: string; at?: string }
+  /** The person's posts were read: how many, how many were set aside as written by apps, and which look like statements about their own crypto. */
+  | { type: 'reading'; posts: number; generated: number; read: number; statements: number }
+  | { type: 'statement'; documentId: string; relevance: number; text: string; url?: string; at?: string }
   /** What changed since the previous analysis of the same case. */
   | {
       type: 'diff'; baseRunId: string; changed: boolean; summary: string;

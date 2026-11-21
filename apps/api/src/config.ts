@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs';
+import { createCorpusConnector } from '@olcys/corpus';
 import { z } from 'zod';
 import {
-  createCoinbasePriceConnector, createEnsNameService, createEsploraConnector, createEvmRpcConnector, createGithubConnector, createNbpConnector,
+  createCoinbasePriceConnector, createEnsNameService, createEsploraConnector, createEvmRpcConnector, createFarcasterConnector, createGithubConnector, createKeybaseConnector, createNbpConnector,
   createWaybackConnector, createWorldArchiveConnector, createWorldChainConnector, createWorldConnectors, createWorldNameService, createWorldPriceConnector,
 } from '@olcys/connectors';
 import type { ArchiveConnector, ChainConnector, NameService, PriceConnector, RatesConnector, SourceConnector } from '@olcys/core';
@@ -72,9 +74,14 @@ export async function loadRuntime(env: NodeJS.ProcessEnv = process.env): Promise
     archive: createWorldArchiveConnector(cfg.ARCHIVE_URL),
     names: createWorldNameService(cfg.WORLD_EXPLORER_URL),
   });
-  // The public internet: GitHub, a Bitcoin explorer, an Ethereum node with ENS, NBP, the Wayback Machine.
+  const corpusDir = process.env.CORPUS_DIR ?? '.corpus';
+  // The public internet: GitHub, Farcaster, Keybase, a Bitcoin explorer, an Ethereum node with ENS, NBP, the Wayback Machine.
   const live = withAllowlist({
-    connectors: [createGithubConnector({ token: cfg.GITHUB_TOKEN })],
+    connectors: [
+      createGithubConnector({ token: cfg.GITHUB_TOKEN }), createFarcasterConnector(), createKeybaseConnector(),
+      // The locally built index answers "which account claimed this address?", which no public service does.
+      ...(existsSync(`${corpusDir}/farcaster/profiles.jsonl`) ? [createCorpusConnector(corpusDir)] : []),
+    ],
     chain: [createEsploraConnector(cfg.BITCOIN_API_URL), createEvmRpcConnector(cfg.ETH_RPC_URL, { indexer: cfg.ETH_INDEXER_URL })],
     rates: createNbpConnector(cfg.LIVE_NBP_API_URL),
     prices: createCoinbasePriceConnector(),

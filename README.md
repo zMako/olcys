@@ -2,7 +2,7 @@
 
 Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, imię i nazwisko, e-mail, telefon, adres krypto) samo przeszukuje publiczne źródła, znajduje powiązane adresy kryptowalutowe i zapisuje każdy ślad razem ze źródłem.
 
-> Stan: **etap 5 z 7, pogłębione wyszukiwanie, źródła rzeczywiste, analizy cykliczne z porównaniem wyników**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków. Oprócz adresów podanych wprost znajduje konta o podobnym nicku i potwierdza je skrótem e-maila w awatarze albo kluczem publicznym, dochodzi od kontraktu do adresu, który go utworzył, i porównuje rytm doby osoby z godzinami przelewów. Sprawę można analizować ponownie według harmonogramu; każda kolejna analiza mówi, co się zmieniło.
+> Stan: **etap 5 z 7, pogłębione wyszukiwanie, źródła rzeczywiste, analizy cykliczne, czytanie wpisów**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków. W trybie na żywo korzysta z kont, które same podpisują swoje adresy (Farcaster, Keybase), i sprawdza te podpisy matematycznie. Wpisy osoby czyta lokalny klasyfikator, a wybrane — model językowy Bielik uruchomiony na tej samej maszynie; ten sam model na żądanie opisuje sprawę. Sprawę można analizować ponownie według harmonogramu; każda kolejna analiza mówi, co się zmieniło.
 
 ![Graf powiązań z szacunkiem w złotych](docs/screenshots/graf-wynik.png)
 
@@ -38,7 +38,7 @@ Wymagany Node.js 20.19 lub nowszy.
 
 ```bash
 npm install
-npm test                          # 126 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
+npm test                          # 152 testy, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
 npm run world                     # terminal 1: środowisko syntetyczne (porty 4101–4106)
 npm run analyze -- szklane_domy   # terminal 2: analiza od jednego nicku, wynik w konsoli
 npm run api                       # terminal 2: API HTTP na porcie 4000
@@ -84,6 +84,9 @@ W interfejsie obok pola wyszukiwania wybiera się źródła: „Środowisko test
 | NBP | kursy średnie, tabela A | `api.nbp.pl` |
 | Wayback Machine | dawne wersje profili | `web.archive.org` |
 | Coinbase Exchange | dzienne kursy BTC i ETH | publiczne dane rynkowe |
+| Farcaster | profil, opis, lokalizacja, połączone konta, ostatnie wpisy; portfele dołączone do konta wraz z oświadczeniem podpisanym kluczem portfela | bez klucza; podpis każdego oświadczenia jest sprawdzany tutaj |
+| Keybase | konta potwierdzone w innych serwisach, adresy Bitcoin podpisane kluczem konta | podpisy sprawdza Keybase; narzędzie to zaznacza w wyniku |
+| Lokalny indeks kont | odpowiedź na pytanie „które konto dołączyło ten adres?” | budowany poleceniem `npm run corpus -- farcaster`; dane zostają na dysku |
 
 Każdy zestaw ma własną listę dozwolonych hostów; żądanie do innego hosta jest odrzucane i zapisywane. Token dostępu jest wysyłany w nagłówku i nigdy nie trafia do magazynu dowodów.
 
@@ -153,6 +156,7 @@ W scenariuszu testowym osoba nie publikuje między 00:00 a 07:00 i żaden z 19 p
 | W2 | Adres z tego samego portfela co adres o wyższym wyniku | wynik tamtego adresu, najwyżej 90% |
 | A1 | Wpłata zgodna z publicznie podaną kwotą | +10 pkt proc. za każdą, najwyżej +20 |
 | N1 | Nazwa adresu wskazuje konto, które podaje ten adres | co najmniej 95% |
+| C3 | Oświadczenie podpisane, sprawdzone przez serwis (Keybase, sieć Farcaster dla portfeli kontraktowych) | co najmniej 95% |
 | K3 | Adres nie został podany, ale utworzył kontrakt, który osoba podaje jako własny | najwyżej 70%; +10 pkt proc., jeśli adres jest też podany wprost |
 | R2 | Przelewy z adresu wychodzą w godzinach, w których osoba nie jest aktywna | −10 pkt proc. |
 | C1 | Podpisana wiadomość wymieniająca konto | 100% |
@@ -175,6 +179,64 @@ Pasma: 80–100% bardzo wysokie, 60–79% prawdopodobne, 40–59% średnie, 1–
 - Szacunek to potencjalny przychód do wyjaśnienia, a nie dochód — jest wnioskiem do weryfikacji.
 
 Kursy NBP pobierane są z publicznego API banku (`NBP_API_URL=https://api.nbp.pl`); domyślnie używana jest dołączona kopia rzeczywistych tabel, żeby narzędzie działało bez Internetu.
+
+### Konta, które podpisują swoje adresy
+
+W części serwisów powiązanie konta z adresem nie jest zdaniem w tekście, tylko podpisanym oświadczeniem. Narzędzie korzysta z nich wprost.
+
+- **Farcaster (C1).** Konto dołącza portfel, a portfel podpisuje własnym kluczem oświadczenie „należę do konta nr …” (EIP-712). Podpis jest przechowywany przy koncie. Narzędzie pobiera go, odtwarza z niego klucz publiczny i sprawdza, czy daje ten adres. Zgodność oznacza 100% i znak „potwierdzone podpisem” — tak samo jak przy podpisanej wiadomości na forum. Podpis złożony dla innego konta jest odrzucany (C0).
+- **Keybase (C3).** Konto podpisuje swoim kluczem listę adresów i dowody posiadania kont w innych serwisach. Podpisy sprawdza Keybase, nie to narzędzie, dlatego wynik to co najmniej 95%, a nie 100%, i jest to napisane na paragonie.
+- **Portfel kontraktowy** nie ma własnego klucza; jego oświadczenie sprawdza sieć. Traktowane jak C3.
+
+Archiwalne kopie stron są używane tylko dla serwisów, których strona profilu zawiera wyłącznie treści właściciela. Na stronach mieszających treści wielu osób archiwalna kopia niczego nie dowodzi (pierwsza próba na prawdziwych danych przypisała tak 31 cudzych adresów — stąd ta reguła).
+
+### Zbiór danych budowany lokalnie (`packages/corpus`)
+
+Sprawdziliśmy pomiarem, skąd brać dane na dużą skalę.
+
+| Źródło | Co zmierzono | Wniosek |
+|---|---|---|
+| Common Crawl, losowa próbka | 10,2 mln stron (80 GB tekstu) w 454 s; prawidłowy adres na 336 stronach z miliona; po polsku 25 stron z adresem | adresy w zwykłej prozie są za rzadkie, żeby szukać ich czytaniem całej sieci |
+| Common Crawl, pełna lista domeny `.pl` | 35,8 mln stron na 523 946 hostach; 34 510 stron ze słowem kluczowym w adresie | lista kandydatów; o przydatności hosta decyduje dopiero treść |
+| Farcaster, konta polskie | 141 kont, 125 z portfelami, 254 adresy, 70 z połączonym kontem X | każdy adres z podpisanym oświadczeniem; zbiór rośnie w tle |
+
+Polskie konta są wyszukiwane bez czytania wszystkich 3,4 mln kont: publiczna lista kanałów → kanały polskie (język, kraj, miasta) → ich obserwujący → ocena każdego konta (podana lokalizacja, język opisu, flaga, strona `.pl`; powody są zapisywane) → listy obserwowanych przez konta polskie, i tak w kółko. Zapytania są ograniczone do kilku na sekundę, a tam, gdzie serwis podaje limit godzinowy, do tego limitu.
+
+```bash
+npm run corpus -- farcaster                 # buduje i uzupełnia polski zbiór kont (można przerywać i wznawiać)
+npm run corpus -- keywords                  # Common Crawl: hosty ze słowem kluczowym w nazwie
+npm run corpus -- listing --tld pl          # Common Crawl: wszystkie strony jednej domeny najwyższego poziomu
+npm run corpus -- sample --files 200        # Common Crawl: losowa próbka przez filtr adresów
+```
+
+Wyniki trafiają do katalogu `.corpus/`, który nie jest częścią repozytorium: to treści prawdziwych osób.
+
+### Czytanie wpisów (`packages/reader`)
+
+Wpisy osoby są nie tylko przeszukiwane pod kątem adresów, ale czytane: czy autor mówi o własnych kryptowalutach. Trzy kroki, od najtańszego:
+
+1. **Odsianie wpisów pisanych przez aplikacje.** „I just minted…”, „Claim yours 👇” i podobne komunikaty nie są słowami osoby. Rozpoznawane po trzech niezależnych znakach: ten sam początek u kilku autorów, ten sam początek wielokrotnie u jednego autora, sformułowania zachęcające czytelnika. W zbiorze 6 529 wpisów to 14%.
+2. **Klasyfikator.** Każdy pozostały wpis jest zamieniany na wektor przez model działający lokalnie (multilingual-e5-small) i oceniany przez mały klasyfikator, który dostaje też trzy znaki leksykalne: nazwę aktywa lub kwotę, pierwszą osobę, czasownik kupna, sprzedaży, posiadania lub otrzymania. Tysiące wpisów na sekundę.
+3. **Model językowy.** Wpisy wybrane przez klasyfikator czyta w całości model językowy uruchomiony na tej samej maszynie (domyślnie Bielik 11B przez Ollama) i zwraca rodzaj wypowiedzi, aktywo, ilość, kwotę. Jego odpowiedź jest sprawdzana, a nie przyjmowana: aktywo musi wyglądać jak symbol, waluta jak waluta.
+
+Ten sam model na żądanie pisze opis sprawy — wyłącznie z listy ustaleń analizy, z zakazem wypowiadania się o prawie i podatku. Opis jest oznaczony jako wygenerowany i nie zastępuje ustaleń.
+
+**Zmierzona jakość klasyfikatora.** Uczony na 1 400 prawdziwych wpisach polskich kont, z których po odsianiu i drugim czytaniu 23 to wypowiedzi o własnych kryptowalutach (1,6%).
+
+| Pomiar | Wynik |
+|---|---|
+| Sam wektor zdania, walidacja krzyżowa | w pierwszych 10% wpisów 9 z 23 wypowiedzi — za mało |
+| Wektor i znaki leksykalne, walidacja krzyżowa | w pierwszych 10% wpisów 20 z 23 |
+| Wektor i znaki leksykalne, konta spoza zbioru uczącego (561 wpisów, 9 wypowiedzi) | w pierwszych 18% wpisów 6 z 9 |
+
+Wniosek: klasyfikator porządkuje wpisy, ale nie rozstrzyga. Dlatego jego wynik nie wpływa na Wskaźnik Pewności, a o tym, co jest wypowiedzią, decyduje drugie czytanie. Etykiety nadawał model językowy według pisemnej instrukcji; przykładów jest mało, więc liczby mają szeroki margines błędu.
+
+**Wymienność modelu.** Model językowy jest za jednym interfejsem (`LlmClient`). `LLM_URL` i `LLM_MODEL` wskazują inny model; `READER=off` wyłącza czytanie; `READER_MODEL_DIR` i `READER_OFFLINE=1` pozwalają pracować bez dostępu do sieci. Żaden tekst sprawy nie opuszcza maszyny.
+
+```bash
+ollama pull SpeakLeash/bielik-11b-v3.1-instruct:Q8_0   # jednorazowo
+npm run reader -- train                                # uczy klasyfikator z oznaczonych wpisów i wypisuje pomiar
+```
 
 ### Analizy cykliczne i porównanie wyników
 
@@ -266,6 +328,10 @@ Evidence chain: intact (83 snapshots verified).
 | jsQR | Apache-2.0 |
 | pngjs, qrcode | MIT |
 | jpeg-js | BSD-3-Clause |
+| @huggingface/transformers, onnxruntime (model wektorów zdań uruchamiany lokalnie) | Apache-2.0, MIT |
+| multilingual-e5-small (model wektorów zdań) | MIT |
+| Bielik 11B v3.1 (model językowy, SpeakLeash) | Apache-2.0 |
+| Ollama (serwer modelu językowego) | MIT |
 
 Dane referencyjne dołączone do środowiska testowego: kursy średnie NBP (tabela A, api.nbp.pl) oraz dzienne kursy zamknięcia BTC i ETH (publiczne dane rynkowe Coinbase Exchange). Odświeżenie: `node scripts/fetch-reference-data.mjs`.
 | @electric-sql/pglite, TypeScript | Apache-2.0 |

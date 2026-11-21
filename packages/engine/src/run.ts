@@ -51,6 +51,21 @@ export const DEFAULT_PARAMS: RunParams = { maxDepth: 3, pivotOnAddresses: true, 
   maxImages: 40, maxArchivedProfiles: 6, maxCapturesPerProfile: 5, maxRounds: 3, maxWalletSearches: 30, maxNameLookups: 20, maxSimilarHandles: 6, maxDeployedLookups: 12,
 };
 
+/** A post in which the person seems to speak about their own crypto, with what the language model made of it once it has read it. */
+export interface StoredStatement {
+  documentId: string;
+  relevance: number;
+  text: string;
+  at?: string;
+  url?: string;
+  detail?: { concernsAuthor: boolean; kind: string; asset?: string; amount?: number; fiatAmount?: number; fiatCurrency?: string; when?: string; reason: string; model: string };
+}
+
+/** Reads posts for statements about the author's own crypto. Implemented by the reader package; any other reader fits. */
+export interface PostReader {
+  triage(posts: { id: string; text: string; at?: string; url?: string }[], opts?: { limit?: number; author?: string }): Promise<{ posts: number; generated: number; read: number; statements: { id: string; relevance: number; text: string; at?: string; url?: string }[] }>;
+}
+
 export interface EngineDeps {
   store: Store;
   connectors: SourceConnector[];
@@ -63,6 +78,8 @@ export interface EngineDeps {
   archive?: ArchiveConnector;
   /** On-chain name service (ENS): names in text become addresses, and an address's own name gives new leads. */
   names?: NameService;
+  /** Reads the person's own posts. Without one, posts are still searched for addresses and amounts, but not read for meaning. */
+  reader?: PostReader;
   /** Approved hosts. Connectors whose hosts are missing here cannot fetch anything. */
   allowlist: string[];
   ruleset?: Ruleset;
@@ -108,6 +125,10 @@ export interface RunSummary {
   estimate?: Estimate;
   /** On-chain names of found addresses (source facts). */
   names: (NameRecord & { verified: boolean })[];
+  /** What the person's own posts say about their crypto (computed; each statement points at its source). */
+  reading?: { posts: number; generated: number; read: number; statements: StoredStatement[] };
+  /** A description of the case written by the language model from the findings above (to verify). */
+  narrative?: { model: string; text: string; createdAt: string };
 }
 
 /**
@@ -312,6 +333,12 @@ export async function beginRun(
       }
     }
 
+    // Signed statements that come with the profile itself: a wallet claim, an address list signed with the account's key.
+    for (const a of item.attestations ?? []) {
+      await store.saveProof(run.id, documentId, a);
+      await emit({ type: 'proof', documentId, chain: a.chain, address: a.address, valid: a.valid });
+    }
+
     // Pictures: an address is often only in a QR code on a photo, where text search cannot see it.
     for (const image of (item.images ?? []).slice(0, 3)) {
       if (imagesRead >= params.maxImages) break;
@@ -341,6 +368,7 @@ export async function beginRun(
     const archive = deps.archive;
     if (!archive) return;
     for (const p of ownProfiles) {
+      if (!p.connector.descriptor.archivable) continue; // an archived page of this site may show other people's content
       if (p.archived || ownProfiles.filter((x) => x.archived).length >= params.maxArchivedProfiles) continue;
       p.archived = true;
       try {
@@ -760,6 +788,26 @@ export async function beginRun(
     });
   };
 
+  /**
+   * Reads what the person wrote. Posts written by apps are set aside; the rest are scored for whether the author
+   * is speaking about their own crypto. Only the person's firmly tied accounts are read.
+   */
+  const readStage = async (a: Assessment) => {
+    const reader = deps.reader;
+    if (!reader) return;
+    try {
+      const mine = new Set(firmClusters(a).flatMap((c) => c.accounts.map((x) => accountKey(x.origin, x.handle))));
+      const texts = (await store.authoredTexts(run.id)).filter((t) => t.text && mine.has(accountKey(t.origin, t.authorHandle)));
+      if (!texts.length) return;
+      const r = await reader.triage(texts.map((t) => ({ id: t.documentId, text: t.text, at: t.at, url: t.url })), { limit: 12 });
+      await store.saveReading(run.id, { posts: r.posts, generated: r.generated, read: r.read, statements: r.statements.map((x) => ({ documentId: x.id, relevance: x.relevance, text: x.text, at: x.at, url: x.url })) });
+      await emit({ type: 'reading', posts: r.posts, generated: r.generated, read: r.read, statements: r.statements.length });
+      for (const x of r.statements) await emit({ type: 'statement', documentId: x.id, relevance: x.relevance, text: x.text.replace(/\s+/g, ' ').slice(0, 200), url: x.url, at: x.at });
+    } catch (err) {
+      log(`reader: ${err instanceof Error ? err.message : err}`); // reading is an addition; its failure must not fail the analysis
+    }
+  };
+
   // ------------------------------------------------------------------ the run
   const execute = async (): Promise<RunSummary> => {
     let status: 'completed' | 'failed' = 'completed';
@@ -819,6 +867,7 @@ export async function beginRun(
         analysed = await finalActivities(assessment);
       }
       await store.saveAssessment(run.id, ruleset, assessment);
+      await readStage(assessment);
       await estimateStage(assessment, analysed);
 
       // A repeated analysis ends by saying what changed since the last one.
@@ -910,5 +959,7 @@ export async function summarizeRun(store: Store, runId: string): Promise<RunSumm
     chain: { accounts: await store.chainAccounts(runId), activity: await store.activities<AddressActivity>(runId) },
     estimate: await store.estimate<Estimate>(runId),
     names: await store.nameRecords<NameRecord & { verified: boolean }>(runId),
+    reading: await store.reading<StoredStatement['detail']>(runId),
+    narrative: await store.narrative(runId),
   };
 }

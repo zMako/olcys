@@ -1,5 +1,7 @@
 node_modules/
 .data/
+# downloaded crawl index and scan results: real pages with real people's posts, never committed
+.corpus/
 dist/
 .env
 .DS_Store

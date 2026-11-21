@@ -17,7 +17,20 @@ export interface CaseActions {
   rerun(): void;
   setSchedule(everySeconds: number | null): void;
   openRun(id: string): void;
+  /** Ask the language model to read the posts the classifier picked out. */
+  readPosts(): void;
+  /** Ask the language model to describe the case from the findings. */
+  describeCase(): void;
 }
+
+/** Is a language model being served on this machine, and is it working on something right now? */
+export interface LlmState {
+  available: boolean;
+  model: string;
+  busy?: 'read' | 'describe';
+}
+
+const STATEMENT_KIND: Record<string, string> = { zbycie: 'zbycie', nabycie: 'nabycie', przychod: 'przychód', stan: 'stan posiadania', oferta: 'oferta', inne: 'bez związku' };
 
 /** Date and time to the second: analyses of one case can be seconds apart. */
 const second = (at: string) => {
@@ -497,7 +510,7 @@ function RhythmStrip({ rhythm }: { rhythm: Rhythm }) {
   );
 }
 
-function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseInfo, actions }: { graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions }) {
+function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseInfo, actions, llm }: { graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions; llm?: LlmState }) {
   const rhythm = summary?.assessment?.clusters.find((c) => c.rhythm && (c.level === 'entered' || c.level === 'publisher'))?.rhythm;
   if (!events.length) {
     return (
@@ -643,6 +656,75 @@ function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseI
         </Section>
       )}
 
+      {graph.finished && summary?.reading && (
+        <Section title="Co osoba sama napisała o swoich kryptowalutach" layer="computed">
+          <p>
+            Przeczytano {summary.reading.posts} wpisów i ogłoszeń osoby. {summary.reading.generated > 0 && <>{summary.reading.generated} napisały aplikacje — pominięto. </>}
+            {summary.reading.statements.length
+              ? `W ${summary.reading.statements.length} autor najpewniej mówi o własnych transakcjach lub stanie posiadania.`
+              : 'W żadnym autor nie mówi o własnych transakcjach.'}
+          </p>
+          <ul className="statements">
+            {summary.reading.statements.map((x) => (
+              <li key={x.documentId} className={x.detail && !x.detail.concernsAuthor ? 'dismissed' : ''}>
+                <q>{x.text.replace(/\s+/g, ' ').slice(0, 260)}{x.text.length > 260 ? '…' : ''}</q>
+                <div className="proof">
+                  {x.at ? `${day(x.at)}, ` : ''}trafność {Math.round(x.relevance * 100)}%
+                  {x.url && (
+                    <>
+                      ,{' '}
+                      <a href={x.url} target="_blank" rel="noreferrer">
+                        źródło
+                      </a>
+                    </>
+                  )}
+                </div>
+                {x.detail && (
+                  <div className="note">
+                    Model językowy:{' '}
+                    {x.detail.concernsAuthor
+                      ? `${STATEMENT_KIND[x.detail.kind] ?? x.detail.kind}${x.detail.amount ? ` ${x.detail.amount}` : ''}${x.detail.asset ? ` ${x.detail.asset}` : ''}${x.detail.when ? `, ${x.detail.when}` : ''}. `
+                      : 'to nie jest wypowiedź o własnych transakcjach autora. '}
+                    {x.detail.reason}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+          {actions && llm?.available && summary.reading.statements.some((x) => !x.detail) && (
+            <div className="case-controls">
+              <button onClick={actions.readPosts} disabled={!!llm.busy}>
+                {llm.busy === 'read' ? 'Model czyta wpisy…' : 'Przeczytaj modelem językowym'}
+              </button>
+              <span className="quiet">{llm.model.split('/').pop()}, na tej maszynie</span>
+            </div>
+          )}
+          <p className="quiet">Wypowiedź wskazuje, gdzie szukać. Nie jest dowodem transakcji i nie zmienia Wskaźnika Pewności.</p>
+        </Section>
+      )}
+
+      {graph.finished && summary && actions && (summary.narrative || llm?.available) && (
+        <Section title="Opis sprawy" layer="hypothesis">
+          {summary.narrative ? (
+            <>
+              <p className="narrative">{summary.narrative.text}</p>
+              <p className="quiet">
+                Napisał model {summary.narrative.model.split('/').pop()} na tej maszynie, wyłącznie z ustaleń tej analizy. Może się mylić; rozstrzygają ustalenia i źródła.
+              </p>
+            </>
+          ) : (
+            <p className="quiet">Model językowy może opisać sprawę własnymi słowami — wyłącznie z ustaleń tej analizy, bez dostępu do sieci.</p>
+          )}
+          {llm?.available && (
+            <div className="case-controls">
+              <button onClick={actions.describeCase} disabled={!!llm.busy}>
+                {llm.busy === 'describe' ? 'Model pisze opis…' : summary.narrative ? 'Napisz ponownie' : 'Napisz opis sprawy'}
+              </button>
+            </div>
+          )}
+        </Section>
+      )}
+
       {graph.finished && rhythm && (rhythm.quiet || rhythm.webCount >= 5) && (
         <Section title="Rytm doby" layer="computed">
           <RhythmStrip rhythm={rhythm} />
@@ -766,7 +848,7 @@ function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseI
   );
 }
 
-export function Panel(props: { node?: GNode; graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id?: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions }) {
+export function Panel(props: { node?: GNode; graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id?: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions; llm?: LlmState }) {
   const { node } = props;
   return (
     <aside className="side" aria-label="Szczegóły">

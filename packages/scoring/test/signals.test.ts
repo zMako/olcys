@@ -105,3 +105,26 @@ describe('daily rhythm', () => {
     expect(compareRhythm(always, day, [], DEFAULT_RULESET).note).toContain('o różnych porach doby');
   });
 });
+
+describe('signed statements that come with a profile', () => {
+  const BTC = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq';
+  const doc = profile('keybase', 'ewa_r');
+  const base = { seeds: [makeIdentifier('username', 'ewa_r')], documents: [doc], hits: [hit(doc, 'username', 'ewa_r')], mentions: [{ documentId: doc.id, chain: 'bitcoin', address: BTC, segmentKind: 'contact', method: 'plain', obfuscation: [], raw: BTC, context: BTC }] };
+  const proof = { documentId: doc.id, chain: 'bitcoin', address: BTC, message: 'Konto ewa_r podpisało oświadczenie o adresie', valid: true };
+
+  it('verified here: 100%; vouched for by a service: at least 95% and said so', () => {
+    const own = assess(facts({ ...base, proofs: [proof] })).links[0];
+    expect(own).toMatchObject({ score: 100, proven: true });
+    expect(own.receipt.map((r) => r.rule)).toEqual(['P1', 'C1']);
+
+    const vouched = assess(facts({ ...base, proofs: [{ ...proof, attestedBy: 'Keybase' }] })).links[0];
+    expect(vouched.score).toBe(95);
+    expect(vouched.proven).toBeUndefined();
+    expect(vouched.receipt.map((r) => r.rule)).toEqual(['P1', 'C3']);
+    expect(vouched.receipt[1].detail).toContain('nie weryfikowało go samodzielnie');
+
+    const failed = assess(facts({ ...base, proofs: [{ ...proof, valid: false, reason: 'podpis nie pochodzi od tego adresu' }] })).links[0];
+    expect(failed.score).toBe(85);
+    expect(failed.receipt.map((r) => r.rule)).toEqual(['P1', 'C0']);
+  });
+});

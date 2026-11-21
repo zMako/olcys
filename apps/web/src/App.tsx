@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { RunDiff, RunSummary, StoredRunEvent } from '@olcys/engine';
 import { GraphView, Legend } from './graph/Graph';
 import { buildGraph, layoutGraph } from './graph/model';
-import { Panel, type CaseActions, type CaseInfo, type Vault } from './Panel';
+import { Panel, type CaseActions, type CaseInfo, type LlmState, type Vault } from './Panel';
 import { describe } from './pl';
 
 /** How long each kind of step stays on screen at normal speed, in milliseconds. */
@@ -36,6 +36,10 @@ export function App() {
   const [diff, setDiff] = useState<RunDiff | null>();
   const [caseInfo, setCaseInfo] = useState<CaseInfo>();
   const following = useRef(true); // open new analyses of this case as they finish
+  const [llm, setLlm] = useState<LlmState>();
+  useEffect(() => {
+    getJson<LlmState>('/api/llm').then(setLlm).catch(() => setLlm(undefined));
+  }, []);
   const autoSelected = useRef(false);
   const jumpToEnd = useRef(query.get('end') === '1');
   const startAt = useRef(query.get('step'));
@@ -139,6 +143,22 @@ export function App() {
         .then(() => getJson<CaseInfo>(`/api/cases/${summary.caseId}`))
         .then(setCaseInfo)
         .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    },
+    readPosts: () => {
+      setLlm((x) => x && { ...x, busy: 'read' });
+      void getJson(`/api/runs/${summary.runId}/read`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+        .then(() => getJson<RunSummary>(`/api/runs/${summary.runId}`))
+        .then(setSummary)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        .finally(() => setLlm((x) => x && { ...x, busy: undefined }));
+    },
+    describeCase: () => {
+      setLlm((x) => x && { ...x, busy: 'describe' });
+      void getJson(`/api/runs/${summary.runId}/narrative`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+        .then(() => getJson<RunSummary>(`/api/runs/${summary.runId}`))
+        .then(setSummary)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        .finally(() => setLlm((x) => x && { ...x, busy: undefined }));
     },
     openRun: (id) => {
       // Looking at an older analysis on purpose: do not jump away when a newer one arrives.
@@ -295,7 +315,7 @@ export function App() {
               </>
             )}
           </div>
-          <Panel node={node} graph={graph} summary={atEnd || node ? summary : undefined} events={events} cursor={cursor} vault={atEnd ? vault : undefined} onSelect={setSelected} diff={atEnd ? diff : undefined} caseInfo={caseInfo} actions={actions} />
+          <Panel node={node} graph={graph} summary={atEnd || node ? summary : undefined} events={events} cursor={cursor} vault={atEnd ? vault : undefined} onSelect={setSelected} diff={atEnd ? diff : undefined} caseInfo={caseInfo} actions={actions} llm={llm} />
         </main>
       )}
     </div>

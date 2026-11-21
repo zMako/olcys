@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { extractAddresses, makeIdentifier, type ConnectorContext, type FetchInit, type FetchedResource, type SourceItem } from '@olcys/core';
-import { createEnsNameService, createEsploraConnector, createEvmRpcConnector, createGithubConnector, createWaybackConnector, decodeString, namehash, selector, transfersFromTx } from '../src';
+import { createEnsNameService, createEsploraConnector, createEvmRpcConnector, createFarcasterConnector, createGithubConnector, createKeybaseConnector, createWaybackConnector, decodeString, namehash, selector, transfersFromTx } from '../src';
+import { signFarcasterClaim, toEip55 } from '@olcys/core';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 
 /** A stand-in for the network: canned answers by URL, and a record of what was asked. */
 function fakeNet(routes: Record<string, unknown | ((init?: FetchInit) => unknown)>) {
@@ -100,6 +104,82 @@ describe('signals from live sources', () => {
     const evm = createEvmRpcConnector(rpc, { indexer: 'https://indexer.example/' });
     expect(evm.descriptor.hosts).toEqual(['node.example', 'indexer.example']);
     expect(await evm.getCreator!('ethereum', '0xdAC17F958D2ee523a2206206994597C13D831ec7', ctx)).toMatchObject({ contract: '0xdAC17F958D2ee523a2206206994597C13D831ec7', creator, txHash: '0xabc' });
+  });
+});
+
+describe('accounts that sign for their addresses', () => {
+  // A wallet made for the test: the claim is signed with its key exactly as a real wallet signs one.
+  const key = '4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
+  const wallet = toEip55(bytesToHex(keccak_256(secp256k1.getPublicKey(hexToBytes(key), false).slice(1)).slice(-20)));
+  const blockHash = '0x63b7b8ab38a49f0571f36572533c4197a1f265a422efcef3454cb7c6ed81f7d1';
+  const b64 = (hex: string) => Buffer.from(hex.slice(2), 'hex').toString('base64');
+  const claim = (address: string, signature: string, type = 0) => ({ data: { timestamp: 137115720, verificationAddAddressBody: { address: address.toLowerCase(), claimSignature: signature, blockHash, type, protocol: 'PROTOCOL_ETHEREUM' } } });
+
+  it('Farcaster: profile, wallets with claims checked here, other accounts, and posts', async () => {
+    const api = 'https://api.farcaster.xyz';
+    const node = 'https://snap.farcaster.xyz:3381';
+    const good = b64(signFarcasterClaim({ fid: 4242, address: wallet, blockHash }, key));
+    const forged = b64(signFarcasterClaim({ fid: 9999, address: wallet, blockHash }, key)); // signed for another account
+    const { ctx, asked } = fakeNet({
+      [`${api}/v2/user-by-username?username=ania`]: { result: {
+        user: { fid: 4242, username: 'ania', displayName: 'Ania', profile: { bio: { text: 'Buduję w sieci.' }, location: { description: 'Gdańsk, Poland' }, url: 'https://ania.example.pl' }, followerCount: 10, followingCount: 5, connectedAccounts: [{ platform: 'x', username: 'ania_x', expired: false }, { platform: 'github', username: 'ania-dev', expired: true }] },
+        extras: { custodyAddress: ETH, ethWallets: [wallet] },
+      } },
+      [`${node}/v1/verificationsByFid`]: { messages: [
+        claim(wallet, good),
+        claim(ETH, forged),
+        { data: { timestamp: 1, verificationAddAddressBody: { address: 'Gxt817xZ8B91RQ9sAiqaovDi457k5xqS4xsUcr2Vt8NV', claimSignature: 'AA==', blockHash: 'x', type: 0, protocol: 'PROTOCOL_SOLANA' } } },
+      ] },
+      [`${node}/v1/castsByFid`]: { messages: [
+        { hash: '0xabcdef0123456789', data: { timestamp: 185640207, castAddBody: { text: 'Sprzedałam wczoraj 2 ETH', parentUrl: 'https://farcaster.xyz/~/channel/polska' } } },
+        { hash: '0x1111111111111111', data: { timestamp: 185640300, castAddBody: { text: '   ' } } },
+      ] },
+    });
+    const fc = createFarcasterConnector();
+    expect(fc.descriptor.hosts).toEqual(['api.farcaster.xyz', 'snap.farcaster.xyz:3381']);
+    expect(fc.supports(makeIdentifier('profile_url', 'https://warpcast.com/ania'))).toBe(true);
+    expect(fc.supports(makeIdentifier('profile_url', 'https://example.com/ania'))).toBe(false);
+    const [profile, post, ...rest] = await collect(fc.search(makeIdentifier('username', 'Ania'), ctx));
+    expect(rest).toEqual([]);
+    expect(profile).toMatchObject({ url: 'https://farcaster.xyz/ania', resourceId: 'fid:4242', docType: 'profile', relation: 'profile_owner', author: { handle: 'ania', displayName: 'Ania' }, container: { section: 'Gdańsk, Poland' } });
+    expect(extractAddresses(profile.segments.find((x) => x.kind === 'contact')!.text).map((m) => m.address).sort()).toEqual([wallet, ETH].sort());
+    // an expired connection is not a lead; the custody address is not shown as the person's wallet
+    expect(profile.discovered.map((d) => d.value)).toEqual(['https://ania.example.pl', 'https://x.com/ania_x']);
+    // the claim signed by the wallet for this account holds; a signature made for another account does not
+    expect(profile.attestations).toEqual([
+      expect.objectContaining({ chain: 'ethereum', address: wallet, valid: true }),
+      expect.objectContaining({ chain: 'ethereum', address: ETH, valid: false, reason: 'podpis nie pochodzi od tego adresu' }),
+    ]);
+    expect(profile.attestations![0].message).toContain('konta ania');
+    expect(profile.attestations![0].attestedBy).toBeUndefined();
+    expect(post).toMatchObject({ docType: 'post', relation: 'author', publishedAt: '2026-11-19T14:43:27.000Z', url: 'https://farcaster.xyz/ania/0xabcdef01', segments: [{ kind: 'body', text: 'Sprzedałam wczoraj 2 ETH' }] });
+    expect(asked).toHaveLength(3);
+    // nothing is asked for a name the network cannot have
+    expect(await collect(fc.search(makeIdentifier('username', 'to_nie_jest_nazwa_farcaster'), ctx))).toEqual([]);
+  });
+
+  it('Keybase: accounts proven on other services and addresses signed with the account key', async () => {
+    const api = 'https://keybase.io/_/api/1.0';
+    const user = {
+      basics: { username: 'ewa_r' }, profile: { full_name: 'Ewa Rzecka', location: 'Radom', bio: 'Programistka.' },
+      proofs_summary: { all: [
+        { proof_type: 'github', nametag: 'devka', state: 1, service_url: 'https://github.com/devka', proof_url: 'https://gist.github.com/x' },
+        { proof_type: 'twitter', nametag: 'stare', state: 2, service_url: 'https://twitter.com/stare', proof_url: 'https://twitter.com/stare/status/1' },
+      ] },
+      cryptocurrency_addresses: { bitcoin: [{ address: BTC, sig_id: 'abc123' }], zcash: [{ address: 't1KiyNNYFy7jEEFsveRJjTaDzE1MtfT2FSx', sig_id: 'z' }] },
+    };
+    const { ctx, asked } = fakeNet({
+      [`${api}/user/lookup.json?usernames=devka`]: { them: [null] },
+      [`${api}/user/lookup.json?github=devka`]: { them: [user] },
+      [`${api}/user/lookup.json?twitter=devka`]: { them: [user] },
+    });
+    const items = await collect(createKeybaseConnector().search(makeIdentifier('username', 'devka'), ctx));
+    expect(asked).toHaveLength(3);
+    expect(items).toHaveLength(1); // the same Keybase account reached twice is one account
+    expect(items[0]).toMatchObject({ url: 'https://keybase.io/ewa_r', author: { handle: 'ewa_r', displayName: 'Ewa Rzecka' }, relation: 'profile_owner' });
+    expect(items[0].discovered.map((d) => `${d.kind}:${d.value}`)).toEqual(['profile_url:https://github.com/devka', 'full_name:Ewa Rzecka']); // a broken proof is not a lead
+    expect(items[0].attestations).toEqual([expect.objectContaining({ chain: 'bitcoin', address: BTC, valid: true, attestedBy: 'Keybase' })]);
+    expect(extractAddresses(items[0].segments.find((x) => x.kind === 'contact')!.text).map((m) => m.address)).toEqual([BTC]);
   });
 });
 

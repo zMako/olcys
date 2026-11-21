@@ -300,11 +300,22 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         // C: a signed message is mathematical proof that the author held the key.
         const proofs = (facts.proofs ?? []).filter((p) => p.chain === chain && p.address === address && ids.clusterOfAccount.get(accountKeyOf(docs.get(p.documentId)!) ?? '') === cluster.id);
         const genuine = proofs.filter((p) => p.valid);
-        const naming = genuine.find((p) => {
+        const names = (p: (typeof genuine)[number]) => {
           const handle = docs.get(p.documentId)!.authorHandle;
           return !!handle && p.message.toLowerCase().includes(handle.toLowerCase());
-        });
-        if (naming) {
+        };
+        const naming = genuine.find((p) => !p.attestedBy && names(p));
+        const vouched = genuine.find((p) => p.attestedBy && names(p));
+        if (!naming && vouched) {
+          // C3: the statement is signed, but the signature was checked by the service that holds it, not by this tool.
+          const add = Math.max(0, ruleset.proof.attestedMin - total);
+          total += add;
+          line({
+            rule: 'C3', title: `Oświadczenie podpisane, sprawdzone przez ${vouched.attestedBy}`, effect: 'bonus', points: add,
+            detail: `${vouched.message}. Podpis sprawdził serwis ${vouched.attestedBy}; to narzędzie nie weryfikowało go samodzielnie, dlatego wynik to co najmniej ${ruleset.proof.attestedMin}%, a nie 100%.`,
+            evidence: [docs.get(vouched.documentId)!.url],
+          });
+        } else if (naming) {
           const add = 100 - total;
           total = 100;
           proven = true;
@@ -313,13 +324,14 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
             detail: `Konto ${docs.get(naming.documentId)!.authorHandle} opublikowało wiadomość podpisaną kluczem prywatnym tego adresu, a treść wiadomości wymienia to konto: „${naming.message}”. Podpis sprawdzono matematycznie — mógł go złożyć tylko posiadacz klucza. Wynik 100%.`,
             evidence: [docs.get(naming.documentId)!.url],
           });
-        } else if (genuine.length) {
+        } else if (genuine.some((p) => !p.attestedBy)) {
+          const unbound = genuine.find((p) => !p.attestedBy)!;
           const add = Math.max(0, Math.min(ruleset.proof.unboundPoints, ruleset.proof.unboundMax - total));
           total += add;
           line({
             rule: 'C2', title: 'Podpis bez wskazania konta', effect: 'bonus', points: add,
-            detail: `Wiadomość jest prawidłowo podpisana kluczem tego adresu, ale jej treść nie wymienia konta, które ją opublikowało („${genuine[0].message}”). Podpis mógł zostać skopiowany z innego miejsca, dlatego premia jest ograniczona: +${ruleset.proof.unboundPoints} pkt proc., nie więcej niż ${ruleset.proof.unboundMax}%.`,
-            evidence: [docs.get(genuine[0].documentId)!.url],
+            detail: `Wiadomość jest prawidłowo podpisana kluczem tego adresu, ale jej treść nie wymienia konta, które ją opublikowało („${unbound.message}”). Podpis mógł zostać skopiowany z innego miejsca, dlatego premia jest ograniczona: +${ruleset.proof.unboundPoints} pkt proc., nie więcej niż ${ruleset.proof.unboundMax}%.`,
+            evidence: [docs.get(unbound.documentId)!.url],
           });
         } else if (proofs.length) {
           line({
