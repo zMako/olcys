@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { getJson, sendJson, type CaseRow } from './api';
 import { CaseView } from './CaseView';
 import { Cases } from './Cases';
-import type { LlmState } from './Panel';
+import { modelPlace, modelShort, type LlmState } from './Panel';
 import { Register } from './Register';
 import { Rules } from './Rules';
 import { setMasking } from './mask';
@@ -119,7 +119,7 @@ export function App() {
           <span className="rail-note">{mask ? 'tryb prezentacji włączony' : 'do prezentacji i nagrań'}</span>
         </button>
         <p className="rail-foot" style={{ marginTop: 0 }}>
-          Wynik liczą wyłącznie reguły. Model językowy {llm?.available ? `(${llm.model.split('/').pop()?.split(':')[0]}, na tej maszynie)` : '(niedostępny)'} pomaga czytać i pisać projekty; na wynik nie ma wpływu.
+          Wynik liczą wyłącznie reguły. Model językowy {llm?.available ? `(${modelShort(llm.model)}, ${modelPlace(llm.model)})` : '(niedostępny)'} pomaga czytać i pisać projekty; na wynik nie ma wpływu.
         </p>
       </nav>
 

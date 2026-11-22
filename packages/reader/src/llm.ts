@@ -1,12 +1,59 @@
+import Anthropic from '@anthropic-ai/sdk';
+
 /**
  * The language model behind the reader. It is one small interface on purpose: the tool does not depend on a
  * particular model. By default it talks to a model served on this machine (Bielik, a Polish open model, through
- * Ollama); pointing LLM_URL and LLM_MODEL elsewhere swaps it without touching the code.
+ * Ollama); pointing LLM_URL and LLM_MODEL elsewhere swaps it without touching the code. With ANTHROPIC_API_KEY set
+ * it uses Claude through the Anthropic API instead — the findings then leave the machine.
  */
 export interface LlmClient {
   /** Model name, recorded with everything the model produced. */
   name: string;
+  /** True when the model runs on this machine; false when the findings are sent to an outside service. */
+  local: boolean;
   complete(system: string, user: string): Promise<string>;
+  /** True when the model is being served and answers. */
+  available(): Promise<boolean>;
+}
+
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
+
+export interface ClaudeOptions {
+  apiKey?: string;
+  model?: string;
+  timeoutMs?: number;
+}
+
+/** Claude through the Anthropic API. The key is read from ANTHROPIC_API_KEY and never stored. */
+export function createClaudeClient(opts: ClaudeOptions = {}): LlmClient {
+  const client = new Anthropic({ apiKey: opts.apiKey ?? process.env.ANTHROPIC_API_KEY, timeout: opts.timeoutMs ?? 240_000 });
+  const model = opts.model ?? process.env.CLAUDE_MODEL ?? DEFAULT_CLAUDE_MODEL;
+  return {
+    name: model,
+    local: false,
+    async complete(system, user) {
+      const res = await client.beta.messages.create({
+        model,
+        max_tokens: 16000,
+        output_config: { effort: 'medium' },
+        // a declined request is re-run on a fallback model chosen by the API, inside the same call
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+        system,
+        messages: [{ role: 'user', content: user }],
+      });
+      if (res.stop_reason === 'refusal') throw new Error('Model językowy odmówił odpowiedzi');
+      return res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').trim();
+    },
+    async available() {
+      return !!(opts.apiKey ?? process.env.ANTHROPIC_API_KEY);
+    },
+  };
+}
+
+/** Claude when an Anthropic API key is configured, otherwise the model served on this machine. */
+export function createLlmClient(): LlmClient {
+  return process.env.ANTHROPIC_API_KEY ? createClaudeClient() : createOllamaClient();
 }
 
 export interface OllamaOptions {
@@ -24,6 +71,8 @@ export function createOllamaClient(opts: OllamaOptions = {}): LlmClient {
   const doFetch = opts.fetchImpl ?? fetch;
   return {
     name: model,
+    local: true,
+    available: () => llmAvailable(opts),
     async complete(system, user) {
       const res = await doFetch(`${url}/api/chat`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(opts.timeoutMs ?? 240_000),

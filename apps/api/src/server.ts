@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { guessIdentifier, knowsIdentity, makeIdentifier } from '@olcys/core';
 import { beginRun, diffRuns, reassessRun, startScheduler, summarizeRun } from '@olcys/engine';
 import { caseFacts, caseFindings, openLeads, renderReport } from '@olcys/report';
-import { StatementReader, createOllamaClient, judgeSamePerson, justifyRequest, llmAvailable, narrate, rankLeads, readWithLlm, writeDossier } from '@olcys/reader';
+import { StatementReader, createLlmClient, judgeSamePerson, justifyRequest, narrate, rankLeads, readWithLlm, writeDossier } from '@olcys/reader';
 import { registerRows, registerStats } from '@olcys/corpus';
 import { DEFAULT_RULESET, type Ruleset } from '@olcys/scoring';
 import { loadRuntime } from './config';
@@ -32,7 +32,7 @@ const reader = {
   },
 };
 // The language model: a second reader and the author of the case description. Served locally; swappable through LLM_URL and LLM_MODEL.
-const llm = createOllamaClient();
+const llm = createLlmClient();
 
 /** Engine dependencies for the chosen set of sources. */
 // The scoring rules in force: the built-in ones, or the ones the analysts last saved.
@@ -283,13 +283,13 @@ app.get<{ Querystring: { page?: string; size?: string; only?: string } }>('/api/
 });
 
 // Is a language model being served, and which one?
-app.get('/api/llm', async () => ({ available: await llmAvailable(), model: llm.name }));
+app.get('/api/llm', async () => ({ available: await llm.available(), model: llm.name, local: llm.local }));
 
 // The language model reads the posts the classifier picked out, one by one, and records what it found.
 app.post<{ Params: { id: string } }>('/api/runs/:id/read', async (req, reply) => {
   const reading = await rt.store.reading(req.params.id);
   if (!reading) return reply.status(404).send({ error: 'no_reading' });
-  if (!(await llmAvailable())) return reply.status(503).send({ error: 'llm_unavailable' });
+  if (!(await llm.available())) return reply.status(503).send({ error: 'llm_unavailable' });
   for (const s of reading.statements.filter((x) => !x.detail)) {
     const detail = await readWithLlm(llm, { text: s.text, at: s.at });
     if (detail) await rt.store.setStatementDetail(req.params.id, s.documentId, detail);
@@ -301,7 +301,7 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/read', async (req, reply) =>
 // The language model describes the case — from the findings of the run and nothing else.
 app.post<{ Params: { id: string } }>('/api/runs/:id/narrative', async (req, reply) => {
   if (!(await rt.store.getRun(req.params.id))) return reply.status(404).send({ error: 'not_found' });
-  if (!(await llmAvailable())) return reply.status(503).send({ error: 'llm_unavailable' });
+  if (!(await llm.available())) return reply.status(503).send({ error: 'llm_unavailable' });
   const facts = caseFacts(await summarizeRun(rt.store, req.params.id));
   const text = await narrate(llm, facts);
   await rt.store.saveNarrative(req.params.id, llm.name, text);
@@ -317,7 +317,7 @@ app.post<{ Params: { id: string } }>('/api/runs/:id/narrative', async (req, repl
 app.post<{ Params: { id: string }; Querystring: { part?: string } }>('/api/runs/:id/dossier', async (req, reply) => {
   const runId = req.params.id;
   if (!(await rt.store.getRun(runId))) return reply.status(404).send({ error: 'not_found' });
-  if (!(await llmAvailable())) return reply.status(503).send({ error: 'llm_unavailable' });
+  if (!(await llm.available())) return reply.status(503).send({ error: 'llm_unavailable' });
   // One part at a time lets the screen show each result as soon as it is ready; without `part` everything is done.
   const parts = z.enum(['describe', 'leads', 'accounts', 'requests']).array().parse(req.query.part ? [req.query.part] : ['describe', 'leads', 'accounts', 'requests']);
   const summary = await summarizeRun(rt.store, runId);

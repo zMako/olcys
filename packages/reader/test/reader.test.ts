@@ -75,7 +75,7 @@ describe('reading posts', () => {
   });
 
   it('second reading: takes the model\'s JSON out of whatever it wraps it in, and distrusts anything else', async () => {
-    const llm = (answer: string): LlmClient => ({ name: 'test-model', complete: async () => answer });
+    const llm = (answer: string): LlmClient => ({ name: 'test-model', local: true, available: async () => true, complete: async () => answer });
     const good = await readWithLlm(llm('Oto odpowiedź:\n```json\n{"dotyczy_autora": true, "rodzaj": "zbycie", "aktywo": "eth", "ilosc": "2", "kwota": 28000, "waluta": "pln", "kiedy": "wczoraj", "uzasadnienie": "Autor pisze, że sprzedał 2 ETH."}\n```'), { text: 'Sprzedałem wczoraj 2 ETH' });
     expect(good).toEqual({ concernsAuthor: true, kind: 'zbycie', asset: 'ETH', amount: 2, fiatAmount: 28000, fiatCurrency: 'PLN', when: 'wczoraj', reason: 'Autor pisze, że sprzedał 2 ETH.', model: 'test-model' });
     // the model says it is someone else's transaction: not the author's, whatever kind it names
@@ -90,7 +90,7 @@ describe('reading posts', () => {
 
   it('the narrative is asked for from the facts alone', async () => {
     let seen = { system: '', user: '' };
-    const llm: LlmClient = { name: 't', complete: async (system, user) => ((seen = { system, user }), 'Podsumowanie.') };
+    const llm: LlmClient = { name: 't', local: true, available: async () => true, complete: async (system, user) => ((seen = { system, user }), 'Podsumowanie.') };
     expect(await narrate(llm, 'Fakty: adres X, wynik 100%.')).toBe('Podsumowanie.');
     expect(seen.system).toContain('WYŁĄCZNIE z podanych faktów');
     expect(seen.system).toContain('Nie wypowiadasz się o prawie ani o podatku');

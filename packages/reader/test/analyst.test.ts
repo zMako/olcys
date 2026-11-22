@@ -12,7 +12,7 @@ const findings: Finding[] = [
 /** A model that answers with what the test tells it to, in order. */
 const scripted = (...answers: string[]): LlmClient & { asked: string[] } => {
   const asked: string[] = [];
-  return { name: 'test-model', asked, complete: async (_system, user) => (asked.push(user), answers.shift() ?? '{}') };
+  return { name: 'test-model', local: true, available: async () => true, asked, complete: async (_system, user) => (asked.push(user), answers.shift() ?? '{}') };
 };
 const json = (zdania: { tekst: string; ustalenia: string[] }[]) => JSON.stringify({ zdania });
 

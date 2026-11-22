@@ -4,7 +4,7 @@ import type { Link } from '@olcys/scoring';
 import { SOURCES } from './api';
 import { BAND_COLOR, GraphView, Legend } from './graph/Graph';
 import { addressId } from './graph/model';
-import { EVERY, STATEMENT_KIND, changeNote, second } from './Panel';
+import { EVERY, STATEMENT_KIND, changeNote, modelPlace, modelShort, second } from './Panel';
 import { ACCOUNT_KIND, BAND, CHAIN, GROUP, KIND, OBFUSCATION, PLACEMENT, day, describe, minute, pln, shortAddress } from './pl';
 import { RunLog } from './RunLog';
 import { Card, Figures, Waiting, type StepProps } from './step-kit';
@@ -358,7 +358,7 @@ export function StepTraces(props: StepProps) {
                   <button onClick={actions.readPosts} disabled={!!llm.busy}>
                     {llm.busy === 'read' ? 'Model czyta wpisy…' : 'Przeczytaj modelem językowym'}
                   </button>
-                  <span className="quiet">{llm.model.split('/').pop()}, na tej maszynie</span>
+                  <span className="quiet">{modelShort(llm.model)}, {modelPlace(llm.model)}</span>
                 </div>
               )}
             </Card>

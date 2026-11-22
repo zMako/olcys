@@ -34,8 +34,14 @@ export interface CaseActions {
 export interface LlmState {
   available: boolean;
   model: string;
+  /** False when the model is an outside service (Claude through the Anthropic API). */
+  local?: boolean;
   busy?: 'read' | 'describe';
 }
+
+/** Short model name and where it runs: on this machine, or Claude through the Anthropic API. */
+export const modelShort = (model: string) => model.split('/').pop()?.split(':')[0] ?? model;
+export const modelPlace = (model: string) => (/^claude/.test(modelShort(model)) ? 'przez API Anthropic' : 'na tej maszynie');
 
 export const STATEMENT_KIND: Record<string, string> = { zbycie: 'zbycie', nabycie: 'nabycie', przychod: 'przychód', stan: 'stan posiadania', oferta: 'oferta', inne: 'bez związku' };
 
@@ -92,7 +98,7 @@ export function Dossier({ dossier }: { dossier: NonNullable<RunSummary['dossier'
         </ul>
       )}
       <p className="quiet">
-        Napisał model {dossier.model.split('/').pop()} na tej maszynie, wyłącznie z {dossier.findings.length} ponumerowanych ustaleń tej analizy. Program sprawdził każde zdanie: wskazane ustalenia istnieją, a liczby i adresy z nich pochodzą.{' '}
+        Napisał model {modelShort(dossier.model)} {modelPlace(dossier.model)}, wyłącznie z {dossier.findings.length} ponumerowanych ustaleń tej analizy. Program sprawdził każde zdanie: wskazane ustalenia istnieją, a liczby i adresy z nich pochodzą.{' '}
         {dossier.rejected.length ? (
           <button className="linklike" onClick={() => setShowRejected(!showRejected)}>
             Odrzucone zdania: {dossier.rejected.length}

@@ -45,6 +45,8 @@ Przykładowy raport: [`docs/przykladowy-raport.pdf`](docs/przykladowy-raport.pdf
 
 ## Uruchomienie
 
+Wersja pokazowa: **https://olcys.maciejkopiec.com** — rejestr 4 500 portfeli, sprawa testowa `szklane_domy` i dwie sprawy na danych publicznych (`kedrix`, `jaroslawbolek`); opis sprawy pisze Claude Opus 5.5.
+
 Wymagany Node.js 20.19 lub nowszy.
 
 ```bash
@@ -341,7 +343,9 @@ Zdanie, które nie przeszło kontroli, wraca do modelu raz z podaniem powodu; je
 
 Wniosek: klasyfikator porządkuje wpisy, ale nie rozstrzyga. Dlatego jego wynik nie wpływa na Wskaźnik Pewności, a o tym, co jest wypowiedzią, decyduje drugie czytanie. Etykiety nadawał model językowy według pisemnej instrukcji; przykładów jest mało, więc liczby mają szeroki margines błędu.
 
-**Wymienność modelu.** Model językowy jest za jednym interfejsem (`LlmClient`). `LLM_URL` i `LLM_MODEL` wskazują inny model; `READER=off` wyłącza czytanie; `READER_MODEL_DIR` i `READER_OFFLINE=1` pozwalają pracować bez dostępu do sieci. Żaden tekst sprawy nie opuszcza maszyny.
+**Wymienność modelu.** Model językowy jest za jednym interfejsem (`LlmClient`). `LLM_URL` i `LLM_MODEL` wskazują inny model; `READER=off` wyłącza czytanie; `READER_MODEL_DIR` i `READER_OFFLINE=1` pozwalają pracować bez dostępu do sieci. Przy modelu lokalnym żaden tekst sprawy nie opuszcza maszyny.
+
+**Claude zamiast modelu lokalnego.** Gdy w `.env` jest `ANTHROPIC_API_KEY`, czytanie wpisów i opracowanie sprawy wykonuje Claude Opus 5.5 przez API Anthropic (`CLAUDE_MODEL` zmienia model). Ustalenia i wpisy są wtedy wysyłane do zewnętrznej usługi; interfejs pokazuje przy każdym wyniku modelu, gdzie działał. Reguły sprawdzania odpowiedzi są te same, a Wskaźnik Pewności i kwota nadal nie zależą od modelu. Tak działa wersja pokazowa — na serwerze bez karty graficznej model 11B się nie mieści.
 
 ```bash
 ollama pull SpeakLeash/bielik-11b-v3.1-instruct:Q8_0   # jednorazowo
@@ -442,6 +446,7 @@ Evidence chain: intact (83 snapshots verified).
 | multilingual-e5-small (model wektorów zdań) | MIT |
 | Bielik 11B v3.1 (model językowy, SpeakLeash) | Apache-2.0 |
 | Ollama (serwer modelu językowego) | MIT |
+| @anthropic-ai/sdk (klient API Anthropic, opcjonalny model Claude) | MIT |
 
 Dane dołączone do narzędzia: statystyki imion i nazwisk z rejestru PESEL (dane.gov.pl, zbiory 1667 i 1681, CC0 1.0); rejestr działalności w zakresie walut wirtualnych (gov.pl, Izba Administracji Skarbowej w Katowicach, informacja publiczna); lista sankcyjna OFAC SDN w opracowaniu 0xB10C (dane rządu USA, domena publiczna); darklist MyEtherWallet (MIT).
 

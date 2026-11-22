@@ -3,7 +3,7 @@ import { knowsIdentity, type Transfer } from '@olcys/core';
 import { draftAttestationRequest, draftRequest, type Indicator } from '@olcys/scoring';
 import { getJson } from './api';
 import { addressId } from './graph/model';
-import { AUDIT, Dossier, EstimatePanel, RhythmStrip, second } from './Panel';
+import { AUDIT, Dossier, EstimatePanel, RhythmStrip, modelPlace, modelShort, second } from './Panel';
 import { CERTAINTY, amounts, day, minute, shortAddress } from './pl';
 import { RunLog } from './RunLog';
 import { Card, Figures, Waiting, type StepProps } from './step-kit';
@@ -376,7 +376,7 @@ export function StepConclusion({ summary, status, actions, llm, events, cursor }
             <span className="layer layer-hypothesis">pomocnicze, do weryfikacji</span>
           </header>
           <p className="card-note">
-            Model działa na tej maszynie i dostaje wyłącznie ponumerowane ustalenia tej analizy. Nie ma wpływu na Wskaźnik Pewności ani na kwotę. Każde jego zdanie jest sprawdzane: musi wskazać ustalenia, a liczby i adresy muszą z nich pochodzić.
+            Model działa {modelPlace(summary.dossier?.model ?? llm?.model ?? '')} i dostaje wyłącznie ponumerowane ustalenia tej analizy. Nie ma wpływu na Wskaźnik Pewności ani na kwotę. Każde jego zdanie jest sprawdzane: musi wskazać ustalenia, a liczby i adresy muszą z nich pochodzić.
           </p>
           {summary.dossier ? (
             <>
@@ -428,7 +428,7 @@ export function StepConclusion({ summary, status, actions, llm, events, cursor }
               <button onClick={actions.describeCase} disabled={!!llm.busy}>
                 {llm.busy === 'describe' ? 'Model opracowuje sprawę…' : summary.dossier ? 'Opracuj ponownie' : 'Opracuj sprawę'}
               </button>
-              <span className="quiet">{llm.model.split('/').pop()}, na tej maszynie</span>
+              <span className="quiet">{modelShort(llm.model)}, {modelPlace(llm.model)}</span>
             </div>
           )}
         </section>
