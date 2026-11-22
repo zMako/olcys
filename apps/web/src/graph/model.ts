@@ -108,6 +108,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
     if (!edges.has(e.id)) edges.set(e.id, e);
     return edges.get(e.id)!;
   };
+  const enteredAddress = new Map<string, string>(); // address as entered → its seed node
   const leadEdge = (via: { kind: string; value: string }, target: string | undefined, seq: number) => {
     const src = leadSource.get(leadKey(via.kind, via.value));
     if (!src || !target || src === target) return;
@@ -134,6 +135,7 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
         if (e.origin === 'seed') {
           const id = `seed:${key}`;
           nodes.set(id, { id, type: 'seed', col: 0, title: e.kind === 'crypto_address' ? shortAddress(e.value) : e.value, sub: KIND[e.kind] ?? e.kind, firstSeq: e.seq });
+          if (e.kind === 'crypto_address') enteredAddress.set(e.value.trim().toLowerCase(), id);
           leadSource.set(key, id);
           touched = [id];
         } else if (e.origin === 'variant') {
@@ -271,6 +273,13 @@ export function buildGraph(events: StoredRunEvent[], count = events.length): Gra
         break;
       }
       case 'link': {
+        // An address the analyst entered has no page it was found on: its node appears with its score, tied to what was entered.
+        const entered = enteredAddress.get(e.address.toLowerCase());
+        if (entered && !nodes.has(addressId(e.chain, e.address))) {
+          const id = addressId(e.chain, e.address);
+          nodes.set(id, { id, type: 'address', col: 2, title: `${e.address.slice(0, 8)}…${e.address.slice(-5)}`, firstSeq: e.seq, chain: e.chain, address: e.address });
+          edge({ id: `${entered}>${id}:entered`, from: entered, to: id, kind: 'match', label: 'wprowadzony adres', firstSeq: e.seq });
+        }
         const n = nodes.get(addressId(e.chain, e.address));
         // A later scoring replaces an earlier one; a link on a firmer identity wins over one on a weaker identity.
         if (n && (!n.link || e.clusterId <= n.link.clusterId)) {

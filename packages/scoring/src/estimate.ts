@@ -121,6 +121,29 @@ export function buildEstimate(
   };
 }
 
+/**
+ * Draft of a request to an institution that publicly attested an address as its verified customer's.
+ * The attestation does not say who the customer is; the institution knows.
+ */
+export function draftAttestationRequest(att: { issuer: string; address: string; claim: string; value?: string; uid?: string; at?: string; sourceUrl?: string }): string {
+  return [
+    'PROJEKT — do weryfikacji i uzupełnienia przez osobę prowadzącą sprawę',
+    '',
+    `Adresat: ${att.issuer}`,
+    `Dotyczy: ustalenia klienta, którego adres ${att.address} adresat publicznie poświadczył jako adres swojego zweryfikowanego klienta`,
+    'Podstawa prawna: [do uzupełnienia]',
+    '',
+    `Adresat opublikował poświadczenie dotyczące wskazanego adresu${att.value ? ` (zweryfikowany kraj klienta: ${att.value})` : ''}${att.at ? `, wystawione ${att.at.slice(0, 10)}` : ''}.`,
+    ...(att.uid ? [`Identyfikator poświadczenia: ${att.uid}`] : []),
+    ...(att.sourceUrl ? [`Poświadczenie jest publicznie dostępne: ${att.sourceUrl}`] : []),
+    '',
+    'Prosimy o przekazanie:',
+    '1. danych identyfikujących klienta, dla którego wystawiono poświadczenie;',
+    '2. innych adresów, które adresat poświadczył lub przypisał temu klientowi;',
+    '3. historii wpłat i wypłat tego klienta, w tym wypłat w walutach tradycyjnych wraz z numerami rachunków.',
+  ].join('\n');
+}
+
 export const formatPln = (n: number) => `${Math.round(n).toLocaleString('pl-PL')} zł`;
 
 /**
@@ -135,7 +158,10 @@ export function draftRequest(off: OffRamp, context: { caseTitle: string; runId: 
     'PROJEKT — do weryfikacji i uzupełnienia przez osobę prowadzącą sprawę',
     '',
     `Adresat: ${off.exchange} (podmiot świadczący usługi wymiany kryptowalut)`,
-    `Dotyczy: ustalenia klienta, któremu przypisano adres depozytowy ${off.depositAddress} (sieć: ${off.chain})`,
+    ...(off.registered
+      ? [`Podmiot o tej nazwie w polskim rejestrze działalności w zakresie walut wirtualnych: ${off.registered.name}, nr ${off.registered.number}, NIP ${off.registered.nip}${off.registered.krs ? `, KRS ${off.registered.krs}` : ''}${off.registered.struckOff ? ' (wpis wykreślony)' : ''} — zgodność samej nazwy, do potwierdzenia (rejestr: stan na ${off.registered.edition})`]
+      : []),
+    `Dotyczy: ustalenia klienta, któremu przypisano adres depozytowy ${off.depositAddress} (sieć: ${off.network ?? off.chain})`,
     'Podstawa prawna: [do uzupełnienia]',
     '',
     `W toku czynności analitycznych ustalono, że na wskazany adres depozytowy wpłynęły następujące środki:`,

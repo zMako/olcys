@@ -26,8 +26,10 @@ export function createOllamaClient(opts: OllamaOptions = {}): LlmClient {
     name: model,
     async complete(system, user) {
       const res = await doFetch(`${url}/api/chat`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
-        body: JSON.stringify({ model, stream: false, options: { temperature: 0 }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
+        method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(opts.timeoutMs ?? 240_000),
+        // A context large enough for a long list of findings (a prompt cut short loses its instructions), and a cap
+        // on the answer so a model that starts repeating itself stops.
+        body: JSON.stringify({ model, stream: false, options: { temperature: 0, num_ctx: 12288, num_predict: 1500 }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
       });
       if (!res.ok) throw new Error(`Model językowy odpowiedział ${res.status}`);
       return ((await res.json()) as { message?: { content?: string } }).message?.content?.trim() ?? '';
@@ -67,4 +69,36 @@ export function firstJson<T>(answer: string): T | undefined {
     }
   }
   return undefined;
+}
+
+/** Every top-level JSON object in a model's answer, in order. A model asked for one object sometimes sends a list of them. */
+export function allJson(answer: string): unknown[] {
+  const out: unknown[] = [];
+  let from = 0;
+  for (;;) {
+    const start = answer.indexOf('{', from);
+    if (start < 0) return out;
+    let depth = 0;
+    let inString = false;
+    let end = -1;
+    for (let i = start; i < answer.length; i++) {
+      const ch = answer[i];
+      if (inString) {
+        if (ch === '\\') i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}' && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    if (end < 0) return out;
+    try {
+      out.push(JSON.parse(answer.slice(start, end + 1)));
+      from = end + 1;
+    } catch {
+      from = start + 1;
+    }
+  }
 }

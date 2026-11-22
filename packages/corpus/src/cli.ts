@@ -3,6 +3,10 @@
 //   npm run corpus -- sample --files 200       scans a random sample of the crawl for valid addresses
 //   npm run corpus -- listing --tld pl        every page of one top-level domain, by URL: hosts and keyword seeds
 //   npm run corpus -- seeds --tld pl          fetches a few pages of every seed host and measures which really carry addresses
+//   npm run corpus -- attestations            wallets whose owners Coinbase attests as verified in Poland (public, on Base)
+//   npm run corpus -- basenames               names of the attested wallets on Base, with the records their owners attached
+//   npm run corpus -- expand                  grows the Polish register along the follow graph, on the protocol node
+//   npm run corpus -- enrich                  adds ENS names and Keybase proofs to every Polish account of the corpus
 //   npm run corpus -- report                   yield of the sample and the domains it points at
 import { latestCrawlId, type CrawlRef } from './cc';
 import { keywordPass } from './discover';
@@ -11,10 +15,24 @@ import { buildReport, type DomainYield } from './report';
 import { runSample } from './sample';
 import { measureSeeds } from './seeds';
 import { ingestFarcaster } from './farcaster';
+import { enrichFarcaster } from './enrich';
+import { expandFarcaster } from './expand';
+import { fullPass } from './fullpass';
+import { readFarcasterRecords } from './farcaster';
+import { readFlows, scanFlows } from './flows';
+import { readPoapHolders } from './poap';
+import { registerStats } from './register';
+import { attestationsDir, ingestCountryAttestations, readAttestations } from './attestations';
+import { ingestBasenames } from './basenames';
 import { readFileSync } from 'node:fs';
 import { listingDir } from './listing';
 
 const [command, ...rest] = process.argv.slice(2);
+try {
+  process.loadEnvFile('.env');
+} catch {
+  // settings may come from the environment alone
+}
 const flag = (name: string) => {
   const i = rest.indexOf(`--${name}`);
   return i >= 0 ? rest[i + 1] : undefined;
@@ -64,6 +82,49 @@ if (command === 'keywords') {
 } else if (command === 'farcaster') {
   const r = await ingestFarcaster(`${crawl.dir}/farcaster`, { maxRequests: Number(flag('max-requests') ?? 20000), perSecond: Number(flag('per-second') ?? 4), log: (m) => console.log(m) });
   console.log(`Farcaster: obejrzano ${n(r.evaluated)} kont, polskich ${n(r.polish)}, z portfelem ${n(r.withWallet)} (${n(r.wallets)} adresów); wpisy ${n(r.casts)} z ${n(r.castsOf)} kont; zapytań ${n(r.requests)}.`);
+  if (r.stopped) console.log(`Zatrzymano: ${r.stopped}`);
+} else if (command === 'attestations') {
+  const country = (flag('country') ?? 'PL').toUpperCase();
+  const r = await ingestCountryAttestations(crawl.dir, country);
+  console.log(`Poświadczenia Coinbase „kraj: ${country}”: ${n(r.attestations)} na ${n(r.wallets)} portfelach, od ${r.first?.slice(0, 10)} do ${r.last?.slice(0, 10)}.`);
+} else if (command === 'basenames') {
+  const country = (flag('country') ?? 'PL').toUpperCase();
+  // The attested wallets, and with --all also every wallet of the Polish accounts found on Farcaster.
+  const more = process.argv.includes('--all') ? readFarcasterRecords(`${crawl.dir}/farcaster`).filter((x) => x.polish.score >= 0.5).flatMap((x) => x.wallets).filter((w) => w.startsWith('0x')) : [];
+  const wallets = [...new Set([...readAttestations(crawl.dir, country).map((a) => a.wallet), ...more])];
+  const r = await ingestBasenames(`${attestationsDir(crawl.dir, country)}/basenames.jsonl`, wallets, { onProgress: (done, named) => done % 1000 === 0 && console.log(`${n(done)} portfeli, ${n(named)} z nazwą`) });
+  console.log(`Nazwy Base: ${n(r.named)} z ${n(r.wallets)} portfeli ma nazwę; ${n(r.withRecords)} nazw ma rekordy (inne konta, strona, opis).`);
+} else if (command === 'register') {
+  console.log(JSON.stringify(registerStats(crawl.dir), null, 2));
+} else if (command === 'flows') {
+  const key = process.env.ALCHEMY_KEY;
+  if (!key) throw new Error('Brak ALCHEMY_KEY: historia sieci Base wymaga klucza.');
+  // Accounts that are both public and attested first, then the other public accounts, then the rest of the register.
+  const polish = readFarcasterRecords(`${crawl.dir}/farcaster`).filter((r) => r.polish.score >= 0.5);
+  // Last: wallets seen at in-person events in Poland on two or more days.
+  const days = new Map<string, Set<string>>();
+  for (const h of readPoapHolders(crawl.dir)) if (!h.virtual) days.set(h.wallet, (days.get(h.wallet) ?? new Set()).add((h.date ?? String(h.dropId)).slice(0, 10)));
+  const regulars = [...days].filter(([, d]) => d.size >= 2).map(([w]) => w);
+  const order = [...polish.filter((r) => r.attested?.length).flatMap((r) => r.wallets), ...polish.flatMap((r) => r.wallets), ...readAttestations(crawl.dir).map((a) => a.wallet), ...regulars];
+  const wallets = [...new Set(order)].filter((w) => w.startsWith('0x')).slice(0, Number(flag('limit') ?? 100000));
+  const r = await scanFlows(crawl.dir, wallets, { key, perSecond: Number(flag('per-second') ?? 3), log: (m) => console.log(m) });
+  const all = readFlows(crawl.dir);
+  console.log(`Przepływy na Base: przejrzano ${n(r.scanned)} portfeli (łącznie ${n(all.length)}), z historią ${n(all.filter((f) => f.transfers).length)}, z wpłatą na giełdę ${n(all.filter((f) => f.offRamps.length).length)}.`);
+} else if (command === 'fullpass') {
+  const r = await fullPass(`${crawl.dir}/farcaster`, { from: flag('from') ? Number(flag('from')) : undefined, to: flag('to') ? Number(flag('to')) : undefined, startPerSecond: Number(flag('start') ?? 40), maxPerSecond: Number(flag('max') ?? 150), log: (m) => console.log(m) });
+  console.log(`Przegląd: przejrzano ${n(r.scanned)} kont, polskich łącznie ${n(r.polish)} (+${n(r.added)}); następne konto ${n(r.next)}.`);
+  if (r.stopped) console.log(`Zatrzymano: ${r.stopped}`);
+} else if (command === 'expand') {
+  const r = await expandFarcaster(`${crawl.dir}/farcaster`, {
+    maxRequests: Number(flag('max-requests') ?? 30000), perSecond: Number(flag('per-second') ?? 8), minNeighbours: Number(flag('min-neighbours') ?? 2), log: (m) => console.log(m),
+  });
+  console.log(`Polskich kont: ${n(r.polish)} (+${n(r.added)}); z portfelem ${n(r.withWallet)}, adresów ${n(r.wallets)}; z kontem X ${n(r.withX)}.`);
+  console.log(`Oświadczenia portfeli sprawdzone w tym przebiegu: ${n(r.claimsVerified)} prawidłowych, ${n(r.claimsFailed)} odrzuconych. Odrzuconych kandydatów łącznie: ${n(r.checked)}. Zapytań: ${n(r.requests)}.`);
+  if (r.stopped) console.log(`Zatrzymano: ${r.stopped}`);
+} else if (command === 'enrich') {
+  const r = await enrichFarcaster(`${crawl.dir}/farcaster`, { maxAccounts: flag('max') ? Number(flag('max')) : undefined, log: (m) => console.log(m) });
+  console.log(`Uzupełniono ${n(r.done)} z ${n(r.accounts)} polskich kont. Nazwy ENS: ${n(r.ensNames)} na ${n(r.withEns)} kontach, w tym z rekordami wskazującymi inne konta lub stronę: ${n(r.ensWithAccounts)}.`);
+  console.log(`Keybase: ${n(r.withKeybase)} kont z potwierdzonym tym samym kontem X; adresów Bitcoin podpisanych tam: ${n(r.bitcoinAddresses)}.`);
   if (r.stopped) console.log(`Zatrzymano: ${r.stopped}`);
 } else if (command === 'report') {
   const r = await buildReport(crawl);

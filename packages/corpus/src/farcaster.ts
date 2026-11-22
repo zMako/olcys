@@ -8,6 +8,8 @@ export interface FarcasterRecord extends FarcasterProfile {
   polish: PolishSignals;
   /** How the account was reached: a Polish channel, or the follow list of a Polish account. */
   via: string;
+  /** Wallets of the account that carry Coinbase's public "verified in Poland" attestation. */
+  attested?: string[];
   fetchedAt: string;
 }
 

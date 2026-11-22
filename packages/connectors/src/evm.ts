@@ -1,6 +1,10 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
-import { classifyCode, parseAddress, toEip55, type AccountInfo, type Chain, type ChainConnector, type ConnectorContext, type Deployment, type NameRecord, type NameService, type Transfer } from '@olcys/core';
+import { createAlchemyTransfers } from './alchemy';
+import { binanceAttestations } from './babt';
+import { describeAttestation, walletAttestations } from './eas';
+import { createBlockscout } from './blockscout';
+import { classifyCode, parseAddress, toEip55, type AccountInfo, type AddressAttestation, type Chain, type ChainConnector, type ConnectorContext, type Deployment, type NameRecord, type NameService, type Transfer } from '@olcys/core';
 
 interface RpcResult {
   result?: string;
@@ -9,9 +13,9 @@ interface RpcResult {
 }
 
 /** One JSON-RPC batch to a node, through the engine's network exit. */
-async function rpc(ctx: ConnectorContext, url: string, calls: { method: string; params: unknown[] }[]): Promise<RpcResult[]> {
+export async function rpc(ctx: ConnectorContext, url: string, calls: { method: string; params: unknown[] }[], headers: Record<string, string> = {}): Promise<RpcResult[]> {
   const body = JSON.stringify(calls.map((c, i) => ({ jsonrpc: '2.0', id: i + 1, ...c })));
-  const res = await ctx.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  const res = await ctx.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body });
   if (res.status !== 200) throw new Error(`Node answered ${res.status}`);
   const parsed = JSON.parse(res.body) as { id: number; result?: string; error?: { message: string } }[];
   const list = Array.isArray(parsed) ? parsed : [parsed];
@@ -23,12 +27,55 @@ async function rpc(ctx: ConnectorContext, url: string, calls: { method: string; 
  * account), how many transactions it sent, and its balance. Works with any node, including one run in-house.
  * A node does not index transfers, so the history of an address needs an indexer on top.
  */
-export function createEvmRpcConnector(rpcUrl: string, opts: { indexer?: string } = {}): ChainConnector {
-  // A node cannot say who created a contract; an indexer with a Blockscout-style API can.
+/** Coinbase's attesting address on Base, and how its attestation types are named. */
+export const COINBASE_ATTESTER = '0x357458739F90461b99789350868CD7CF330Dd7EE';
+const CLAIMS: Record<string, string> = { 'Verified Account': 'verified_account', 'Verified Country': 'verified_country' };
+
+/** Reads Coinbase's public attestations about one address from an Ethereum Attestation Service index. */
+export async function coinbaseAttestations(endpoint: string, address: string, ctx: ConnectorContext): Promise<AddressAttestation[]> {
+  const query = `{ attestations(take: 20, where: { recipient: { equals: "${address}", mode: insensitive }, attester: { equals: "${COINBASE_ATTESTER}" }, revoked: { equals: false } }) { id time decodedDataJson schema { schemaNames { name } } } }`;
+  const res = await ctx.fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query }) });
+  if (res.status !== 200) return [];
+  const list = ((JSON.parse(res.body) as { data?: { attestations?: { id: string; time: number; decodedDataJson: string; schema?: { schemaNames?: { name: string }[] } }[] } }).data?.attestations ?? []);
+  const out: AddressAttestation[] = [];
+  for (const a of list) {
+    const claim = CLAIMS[a.schema?.schemaNames?.[0]?.name ?? ''];
+    if (!claim) continue;
+    let value: string | undefined;
+    try {
+      const v = (JSON.parse(a.decodedDataJson) as { value?: { value?: unknown } }[])[0]?.value?.value;
+      if (claim === 'verified_country' && typeof v === 'string' && /^[A-Z]{2}$/.test(v)) value = v;
+    } catch {
+      // an attestation we cannot decode is still an attestation
+    }
+    out.push({ chain: 'ethereum', address, issuer: 'Coinbase', claim, value, uid: a.id, at: new Date(a.time * 1000).toISOString(), sourceUrl: `${new URL(endpoint).origin}/attestation/view/${a.id}` });
+  }
+  return out;
+}
+
+export interface EvmOptions {
+  indexer?: string;
+  labels?: string;
+  /** Attestation index (Ethereum Attestation Service on Base). */
+  attestations?: string;
+  /** A node of BNB Smart Chain, to check Binance's account-bound token. */
+  bscRpc?: string;
+  /** Key for transfer history on Base. */
+  baseKey?: string;
+  /** Attestations from data kept on this machine (e.g. attendance tokens of events in Poland). */
+  localAttestations?(address: string): AddressAttestation[];
+}
+
+export function createEvmRpcConnector(rpcUrl: string, opts: EvmOptions = {}): ChainConnector {
+  // A node cannot say who created a contract or list an address's transfers; an indexer with a Blockscout-style API can.
   const indexer = opts.indexer?.replace(/\/+$/, '');
+  const scout = indexer ? createBlockscout({ indexer, labels: opts.labels }) : undefined;
+  // The same addresses live on the Base network too. Its history comes from a second source; its labels from the same label service.
+  const base = opts.baseKey ? createAlchemyTransfers({ key: opts.baseKey }) : undefined;
+  const baseLabels = base && indexer && opts.labels ? createBlockscout({ indexer, labels: opts.labels, chainId: 8453 }) : undefined;
   return {
     id: 'evm-rpc',
-    descriptor: { name: `Węzeł Ethereum (${new URL(rpcUrl).host})`, chains: ['ethereum'], hosts: [new URL(rpcUrl).host, ...(indexer ? [new URL(indexer).host] : [])], synthetic: false },
+    descriptor: { name: `Węzeł Ethereum (${new URL(rpcUrl).host})${indexer ? ` i indekser (${new URL(indexer).host})` : ''}`, chains: ['ethereum'], hosts: [new URL(rpcUrl).host, ...(scout?.hosts ?? []), ...(opts.attestations ? [new URL(opts.attestations).host] : []), ...(base ? [base.host] : []), ...(opts.bscRpc ? [new URL(opts.bscRpc).host] : [])], synthetic: false },
     supports: (chain) => chain === 'ethereum',
     async getAccount(chain, address, ctx): Promise<AccountInfo> {
       const [code, nonce, balance] = await rpc(ctx, rpcUrl, [
@@ -37,15 +84,44 @@ export function createEvmRpcConnector(rpcUrl: string, opts: { indexer?: string }
         { method: 'eth_getBalance', params: [address, 'latest'] },
       ]);
       if (code.result === undefined) throw new Error(code.error?.message ?? 'node error');
+      // The same address may be a plain account on the main network and a contract on Base (or the other way round).
+      const baseCode = base ? (await rpc(ctx, base.url, [{ method: 'eth_getCode', params: [address, 'latest'] }], base.headers).catch(() => [] as RpcResult[]))[0]?.result : undefined;
+      const here = classifyCode(code.result);
+      const there = baseCode ? classifyCode(baseCode) : undefined;
       const eth = Number(BigInt(balance.result ?? '0x0')) / 1e18;
       return {
-        chain, address, ...classifyCode(code.result), code: code.result, labels: [], txCount: Number(BigInt(nonce.result ?? '0x0')),
+        chain, address, ...(here.kind !== 'contract' && there?.kind === 'contract' ? there : here), code: code.result, labels: [...(scout ? await scout.labelsOf(address, ctx) : []), ...(baseLabels ? await baseLabels.labelsOf(address, ctx) : [])].filter((l, i, all) => all.findIndex((x) => x.name === l.name) === i), txCount: Number(BigInt(nonce.result ?? '0x0')),
         balances: eth > 0 ? [{ asset: 'ETH', amount: Math.round(eth * 1e6) / 1e6 }] : [], snapshotId: code.snapshotId, sourceUrl: rpcUrl,
       };
     },
-    async getTransfers(): Promise<Transfer[]> {
-      return [];
+    async getTransfers(_chain, address, ctx): Promise<Transfer[]> {
+      const [main, onBase] = await Promise.all([
+        scout ? scout.transfers(address, ctx) : [],
+        // If Base cannot be read, the main network's history still stands; the gap is written to the run's log.
+        base ? base.transfers(address, ctx).catch((err) => (ctx.log(err instanceof Error ? err.message : String(err)), [] as Transfer[])) : [],
+      ]);
+      if (baseLabels && onBase.length) await baseLabels.labelMany([...new Set(onBase.flatMap((t) => [t.from, t.to]))].filter((a) => a !== address), ctx);
+      return [...main, ...onBase].sort((a, b) => a.at.localeCompare(b.at));
     },
+    async getLabelled(_chain, addresses, ctx): Promise<string[]> {
+      await Promise.all([scout?.labelMany(addresses, ctx), baseLabels?.labelMany(addresses, ctx)]);
+      const out: string[] = [];
+      for (const a of addresses) if ((scout && (await scout.labelsOf(a, ctx)).length) || (baseLabels && (await baseLabels.labelsOf(a, ctx)).length)) out.push(a);
+      return out;
+    },
+    ...(opts.attestations || opts.bscRpc || opts.localAttestations
+      ? {
+          // Everything institutions publicly state about the address: exchanges that verified its owner, identity
+          // services, event organisers. Each source is asked on its own; one that fails does not cost the others.
+          async getAttestations(_chain: Chain, address: string, ctx: ConnectorContext): Promise<AddressAttestation[]> {
+            const [eas, babt] = await Promise.all([
+              opts.attestations ? walletAttestations(opts.attestations, address, ctx).catch((err) => (ctx.log(`poświadczenia adresu ${address}: ${err instanceof Error ? err.message : err}`), [] as AddressAttestation[])) : [],
+              opts.bscRpc ? binanceAttestations(opts.bscRpc, address, ctx).catch((err) => (ctx.log(`token Binance adresu ${address}: ${err instanceof Error ? err.message : err}`), [] as AddressAttestation[])) : [],
+            ]);
+            return [...[...eas, ...babt].map((a): AddressAttestation => ({ ...a, note: a.note ?? describeAttestation(a) })), ...(opts.localAttestations?.(address) ?? [])];
+          },
+        }
+      : {}),
     ...(indexer
       ? {
           async getCreator(chain: Chain, contract: string, ctx: ConnectorContext): Promise<Deployment | undefined> {

@@ -4,3 +4,4 @@ export * from './llm';
 export * from './statements';
 export * from './templates';
 export * from './lexical';
+export * from './analyst';

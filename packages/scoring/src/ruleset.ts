@@ -58,12 +58,20 @@ export interface Ruleset {
    * hours loses `conflictPenalty` points. The person-level comparison needs `minTransfers` and is called
    * consistent when a random rhythm would produce it with probability at most `significance`.
    */
+  /**
+   * A match by first name and surname alone is worth what the name's rarity makes it worth. A name expected for fewer
+   * than `rareBelow` people in Poland lifts the limit to `rareCap` (only when no other found account carries it);
+   * a name expected for `commonFrom` or `veryCommonFrom` people lowers it.
+   */
+  nameFrequency: { rareBelow: number; rareCap: number; commonFrom: number; commonCap: number; veryCommonFrom: number; veryCommonCap: number };
+  /** A language model's opinion on an unconfirmed account: points added (below the identity limit) or taken away. */
+  opinion: { bonus: number; penalty: number };
   rhythm: { quietHours: number; minWebEvents: number; maxWebInQuiet: number; minTransfers: number; significance: number; addressMinTransfers: number; conflictShare: number; conflictPenalty: number };
 }
 
 export const DEFAULT_RULESET: Ruleset = {
   id: 'olcys-kas',
-  version: '1.2.0',
+  version: '1.3.0',
   name: 'Metoda KAS z kontrolą tożsamości',
   bands: [
     { id: 'very_high', label: 'BARDZO WYSOKIE', min: 80 },
@@ -100,6 +108,8 @@ export const DEFAULT_RULESET: Ruleset = {
   estimate: { minScore: 60 },
   deployer: { max: 70, bonus: 10 },
   keys: { maxHolders: 3 },
+  nameFrequency: { rareBelow: 1, rareCap: 75, commonFrom: 100, commonCap: 25, veryCommonFrom: 1000, veryCommonCap: 15 },
+  opinion: { bonus: 10, penalty: 15 },
   rhythm: { quietHours: 7, minWebEvents: 10, maxWebInQuiet: 0.1, minTransfers: 8, significance: 0.05, addressMinTransfers: 5, conflictShare: 0.5, conflictPenalty: 10 },
 };
 

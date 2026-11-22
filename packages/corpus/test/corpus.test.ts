@@ -139,3 +139,67 @@ describe('Polish accounts', () => {
     expect(polishSignals({ texts: posts })).toMatchObject({ score: 0.6 });
   });
 });
+
+describe('the local index: from an address or a nick on another service to the account', () => {
+  it('finds the account, fetches it afresh, and drops ties that no longer hold', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { makeIdentifier } = await import('@olcys/core');
+    const { createCorpusConnector, loadCorpusIndex } = await import('../src');
+    const dir = mkdtempSync(`${tmpdir()}/olcys-corpus-`);
+    mkdirSync(`${dir}/farcaster`);
+    const wallet = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+    const gone = '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359';
+    const record = { fid: 77, username: 'ania', followers: 1, following: 1, wallets: [wallet, gone], connected: [{ platform: 'x', username: 'Ania_X' }], polish: { score: 0.6, reasons: [] }, via: 'kanał polska', fetchedAt: '2026-11-21T00:00:00.000Z' };
+    writeFileSync(`${dir}/farcaster/profiles.jsonl`, JSON.stringify(record) + '\n');
+    writeFileSync(`${dir}/farcaster/enrichment.jsonl`, JSON.stringify({ fid: 77, ens: [{ address: wallet, name: 'ania.eth', records: {} }], keybase: [{ username: 'ania_kb', via: 'x:Ania_X', proofs: [{ service: 'github', handle: 'ania-dev' }], bitcoin: ['bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'] }], at: '2026-11-21T00:00:00.000Z' }) + '\n');
+
+    const index = loadCorpusIndex(dir);
+    expect(index).toMatchObject({ accounts: 1, addresses: 2 });
+    expect([...index.byAnyHandle.keys()].sort()).toEqual(['ania', 'ania-dev', 'ania.eth', 'ania_kb', 'ania_x']);
+    expect(index.people.get(77)).toMatchObject({ keybase: ['ania_kb'], names: [{ name: 'ania.eth', address: wallet }], bitcoin: ['bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'] });
+
+    const asked: string[] = [];
+    // today the account lists only one of the two wallets, and the X account is still connected
+    const live = { result: { user: { fid: 77, username: 'ania', profile: { bio: { text: 'x' } }, connectedAccounts: [{ platform: 'x', username: 'Ania_X', expired: false }] }, extras: { ethWallets: [wallet] } } };
+    const ctx = { log: () => {}, fetch: async (url: string) => (asked.push(url), { snapshotId: 's1', url, status: 200, contentType: 'application/json', body: JSON.stringify(live), sha256: '', fetchedAt: '' }) };
+    const c = createCorpusConnector(dir);
+    const all = async (kind: 'crypto_address' | 'username', value: string) => {
+      const out = [];
+      for await (const x of c.search(makeIdentifier(kind, value), ctx)) out.push(x);
+      return out;
+    };
+    expect(c.supports(makeIdentifier('crypto_address', wallet))).toBe(true);
+    expect(c.supports(makeIdentifier('crypto_address', '0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB'))).toBe(false);
+    // an address: the account is a publisher of it, read afresh from the network
+    expect(await all('crypto_address', wallet)).toEqual([expect.objectContaining({ resourceId: 'fid:77', relation: 'mention', snapshotId: 's1' })]);
+    // an address the account has since removed is not reported
+    expect(await all('crypto_address', gone)).toEqual([]);
+    // the nick the person holds on X leads to their account, with the Keybase account as a lead
+    const [byX] = await all('username', 'ania_x');
+    expect(byX).toMatchObject({ relation: 'profile_owner', author: { handle: 'ania' } });
+    expect(byX.discovered.map((d) => d.value)).toContain('https://keybase.io/ania_kb');
+    expect(byX.discovered.map((d) => d.value)).toContain('https://farcaster.xyz/ania'); // so that the live connector reads the claims and posts
+    // a nick proven on Keybase counts too, and so does the on-chain name of a wallet that is still attached
+    expect(await all('username', 'ania-dev')).toHaveLength(1);
+    expect(await all('username', 'ania.eth')).toHaveLength(1);
+    // the account's own name is left to the live connector
+    expect(await all('username', 'ania')).toEqual([]);
+    expect(asked.every((u) => u === 'https://api.farcaster.xyz/v2/user-by-fid?fid=77')).toBe(true);
+  });
+});
+
+describe('locations given as coordinates', () => {
+  it('places Polish cities inside the outline and neighbouring capitals outside', async () => {
+    const { inPoland, nearestCity, parseGeo, polishSignals } = await import('../src');
+    const inside: [string, number, number][] = [['Warszawa', 52.23, 21.01], ['Kraków', 50.06, 19.94], ['Gdańsk', 54.35, 18.65], ['Szczecin', 53.43, 14.55], ['Rzeszów', 50.04, 22.0], ['Białystok', 53.13, 23.16], ['Wrocław', 51.11, 17.03], ['Zakopane', 49.3, 19.95], ['Suwałki', 54.1, 22.93]];
+    const outside: [string, number, number][] = [['Berlin', 52.52, 13.4], ['Praga', 50.08, 14.44], ['Lwów', 49.84, 24.03], ['Wilno', 54.69, 25.28], ['Kaliningrad', 54.71, 20.51], ['Brześć', 52.1, 23.7], ['Bratysława', 48.15, 17.11], ['Grodno', 53.68, 23.83], ['Londyn', 51.5, -0.12]];
+    for (const [name, lat, lon] of inside) expect(inPoland(lat, lon), name).toBe(true);
+    for (const [name, lat, lon] of outside) expect(inPoland(lat, lon), name).toBe(false);
+    expect(nearestCity(52.25, 21.0)).toEqual({ city: 'Warszawa', km: 2 });
+    expect(parseGeo('geo:52.23,21.01')).toEqual({ lat: 52.23, lon: 21.01 });
+    expect(parseGeo('Warsaw')).toBeUndefined();
+    expect(polishSignals({ geo: { lat: 52.23, lon: 21.01 }, bio: 'studying' })).toEqual({ score: 0.6, reasons: ['podana lokalizacja w Polsce (Warszawa)'] });
+    expect(polishSignals({ geo: { lat: 52.52, lon: 13.4 }, bio: 'studying' }).score).toBe(0);
+  });
+});

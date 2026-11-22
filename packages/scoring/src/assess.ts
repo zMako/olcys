@@ -1,16 +1,16 @@
-import { bundledLabel, foldDiacritics, type AccountInfo, type AddressLabel } from '@olcys/core';
-import { accountKeyOf, resolveIdentities } from './identity';
+import { bundledLabel, foldDiacritics, knowsIdentity, parseAddress, type AccountInfo, type AddressLabel } from '@olcys/core';
+import { RECORD_SERVICES, accountKeyOf, resolveIdentities } from './identity';
 import { buildHistories } from './history';
 import { compareRhythm, hourHistogram, inWindow, quietHoursOf, windowText, type Rhythm } from './rhythm';
 import { DEFAULT_RULESET, bandOf, type Ruleset } from './ruleset';
-import type { Assessment, BandId, Challenge, ClusterAccount, DocFact, Link, MentionFact, Occurrence, Placement, ReceiptLine, RunFacts } from './types';
+import type { Assessment, BandId, Challenge, Cluster, ClusterAccount, DocFact, Link, MentionFact, Occurrence, Placement, ReceiptLine, RunFacts } from './types';
 
 const PLACEMENT_ORDER: Placement[] = ['own_profile', 'sale', 'discussion', 'mass_comment', 'quoted'];
 const KIND_PL: Record<string, string> = { profile: 'profil', repo: 'repozytorium', ad: 'ogłoszenie', post: 'wpis', page: 'strona' };
 const CATEGORY_PL: Record<string, string> = {
   exchange: 'giełda', exchange_deposit: 'adres depozytowy giełdy', p2p: 'usługa wymiany P2P', payment_gateway: 'bramka płatnicza', card: 'karta płatnicza',
   otc: 'kantor', dex: 'giełda zdecentralizowana', token: 'kontrakt tokena', contract: 'smart kontrakt', mixer: 'mikser', charity: 'zbiórka publiczna',
-  bridge: 'most między sieciami', other: 'inny podmiot',
+  bridge: 'most między sieciami', other: 'inny podmiot', sanctioned: 'adres z listy sankcyjnej', reported: 'adres zgłoszony jako oszustwo',
 };
 const short = (a: string) => `${a.slice(0, 10)}…${a.slice(-6)}`;
 const uniq = <T,>(xs: T[]) => [...new Set(xs)];
@@ -94,6 +94,32 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
       out.push({ txHash: t.txHash, at: t.at });
     }
     return out;
+  };
+
+  /** V1: what institutions publicly state about an address. They name nobody; some of them know who the owner is. */
+  const vouchLines = (chain: string, address: string): { lines: Omit<ReceiptLine, 'total'>[]; vouchers: string[] } => {
+    const lines: Omit<ReceiptLine, 'total'>[] = [];
+    const attestedBy = (facts.attestations ?? []).filter((x) => x.chain === chain && x.address === address);
+    for (const issuer of uniq(attestedBy.map((x) => x.issuer))) {
+      const theirs = attestedBy.filter((x) => x.issuer === issuer);
+      const country = theirs.find((x) => x.claim === 'verified_country' && x.value)?.value;
+      const first = theirs.map((x) => x.at).filter(Boolean).sort()[0];
+      const names = theirs.some(knowsIdentity);
+      const said = uniq(theirs.map((x) => x.note).filter((n): n is string => !!n));
+      lines.push({
+        rule: 'V1', title: `Publiczne poświadczenie: ${issuer}`, effect: 'info', points: null,
+        detail: `${said.length
+          ? `Publicznie poświadczono: ${said.join('; ')}`
+          : `${issuer} poświadcza publicznie, w łańcuchu bloków, że właściciel tego adresu jest zweryfikowanym klientem tej giełdy${country ? ` (kraj weryfikacji: ${country})` : ''}`}${first ? `; najwcześniejsze poświadczenie z ${day(first)}` : ''}. ${
+          names
+            ? `Poświadczenie nie mówi, kim jest właściciel — mówi, kto to wie: ${issuer} sprawdził jego dokumenty i może go wskazać na wniosek organu.`
+            : 'Poświadczenie nie wskazuje osoby i nie pochodzi od podmiotu, który sprawdzał jej dokumenty; jest okolicznością, nie dowodem tożsamości.'
+        } Nie zmienia Wskaźnika Pewności: dotyczy adresu, a nie tego, czy adres należy do badanej osoby.`,
+        evidence: uniq(theirs.map((x) => x.sourceUrl).filter((u): u is string => !!u)),
+      });
+    }
+    // Only an issuer that checked the owner's documents can name the owner.
+    return { lines, vouchers: uniq(attestedBy.filter(knowsIdentity).map((x) => x.issuer)) };
   };
 
   const links: Link[] = [];
@@ -353,9 +379,10 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         }
         const named = (facts.names ?? []).find((n) => n.chain === chain && n.address === address && n.verified);
         if (named) {
-          const handles = new Set(cluster.accounts.map((x) => x.handle.toLowerCase()));
           const emails = new Set(cluster.identifiers.filter((i) => i.kind === 'email').map((i) => i.normalized));
-          const pointer = Object.entries(named.records).find(([k, v]) => (k === 'email' ? emails.has(v.toLowerCase()) : ['com.github', 'com.twitter', 'org.telegram'].includes(k) && handles.has(v.replace(/^@/, '').toLowerCase())));
+          // a record confirms the link only if it names an account of this person on the very service the record is about
+          const pointsHere = (k: string, v: string) => !!RECORD_SERVICES[k] && cluster.accounts.some((x) => RECORD_SERVICES[k].includes(x.origin) && x.handle.toLowerCase() === v.replace(/^@/, '').toLowerCase());
+          const pointer = Object.entries(named.records).find(([k, v]) => (k === 'email' ? emails.has(v.toLowerCase()) : pointsHere(k, v)));
           if (pointer) {
             const add = Math.max(0, ruleset.names.mutualMin - total);
             total += add;
@@ -389,6 +416,11 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
             evidence: [m.url],
           });
         }
+
+        // V1: an institution vouches, in public, for whoever owns the address. It names nobody — it names who knows.
+        const attested = vouchLines(chain, address);
+        const vouchers = attested.vouchers;
+        for (const l of attested.lines) line(l);
 
         if (info?.kind === 'delegated_eoa') {
           line({
@@ -435,6 +467,7 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
         challenges.sort((a, b) => order[a.weight] - order[b.weight]);
         if (!proven) wouldConfirm.push('Wiadomość podpisana kluczem tego adresu, opublikowana przez konto osoby.');
         if (origins.length === 1) wouldConfirm.push('Ten sam adres na innym koncie tej osoby, w innym serwisie.');
+        for (const issuer of vouchers) wouldConfirm.unshift(`Dane klienta z ${issuer}: podmiot ten sam poświadczył publicznie, że sprawdził tożsamość właściciela tego adresu.`);
         wouldConfirm.push('Dane giełdy lub usługi, do której trafiły środki z tego adresu.');
 
         if (indirect) wouldConfirm.unshift('Przelew między tym adresem a innym adresem osoby.');
@@ -456,10 +489,24 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
           }
         }
 
+        // M1: a language model compared this unconfirmed account with the person's confirmed ones. Its opinion is an
+        // aid: agreement adds a little and stays under the identity limit; disagreement takes points away after it.
+        const opinion = cluster.identityCap < 100 ? facts.opinions?.find((o) => o.verdict !== 'unclear' && cluster.accounts.some((x) => x.origin === o.origin && x.handle.toLowerCase() === o.handle.toLowerCase())) : undefined;
+        const said = opinion ? `Model językowy (${opinion.model}) porównał konto ${opinion.handle} z kontami osoby. ${opinion.reasons.join(' ')}`.trim() : '';
+        if (opinion?.verdict === 'same') {
+          total += ruleset.opinion.bonus;
+          line({ rule: 'M1', title: 'Ocena modelu: prawdopodobnie ta sama osoba', effect: 'bonus', points: ruleset.opinion.bonus, detail: `${said} Ocena jest pomocnicza i nie podnosi wyniku ponad limit tożsamości.`, evidence: [] });
+        }
+
         // T: the score can never exceed how sure we are that these accounts are the person asked about.
         if (total > cluster.identityCap) {
           total = cluster.identityCap;
           line({ rule: 'T1', title: 'Limit pewności tożsamości', effect: 'cap', points: cluster.identityCap, detail: cluster.identityNote, evidence: [] });
+        }
+        if (opinion?.verdict === 'different') {
+          const cut = Math.min(ruleset.opinion.penalty, total);
+          total -= cut;
+          line({ rule: 'M1', title: 'Ocena modelu: prawdopodobnie inna osoba', effect: 'penalty', points: cut, detail: `${said} Ocena jest pomocnicza.`, evidence: [] });
         }
       }
 
@@ -484,6 +531,44 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
       for (const t of outgoing(l.chain, l.address)) sentAt.set(`${l.chain}:${t.txHash}`, t.at);
     }
     if (webTimes.length || sentAt.size) cluster.rhythm = compareRhythm(webTimes, [...sentAt.values()], offBeat, ruleset);
+  }
+
+  // E1: an address the analyst entered is the starting point of the case even when no account published it.
+  // The tool then says what the chain and public attestations show about it — and that it cannot name the owner.
+  for (const seed of facts.seeds) {
+    const parsed = seed.kind === 'crypto_address' ? parseAddress(seed.value) : undefined;
+    if (!parsed || links.some((l) => l.chain === parsed.chain && l.address === parsed.address)) continue;
+    const { chain, address } = parsed;
+    const cluster: Cluster = {
+      id: `A${ids.clusters.filter((c) => c.id.startsWith('A')).length + 1}`, level: 'entered', identityCap: 100,
+      identityNote: 'Adres wprowadził analityk. Nie znaleziono konta, które go opublikowało, więc narzędzie nie wskazuje osoby.',
+      accounts: [], joins: [], identifiers: [],
+    };
+    ids.clusters.push(cluster);
+    const info = accountInfo.get(`${chain}:${address}`);
+    const excluded = exclusionOf(chain, address);
+    const receipt: ReceiptLine[] = [];
+    const vouched = vouchLines(chain, address);
+    if (excluded) receipt.push({ rule: excluded.rule, title: excluded.title, effect: 'exclusion', points: null, total: 0, detail: excluded.detail, evidence: info?.sourceUrl ? [info.sourceUrl] : [] });
+    else {
+      receipt.push({
+        rule: 'E1', title: 'Adres wprowadzony przez analityka', effect: 'base', points: 100, total: 100,
+        detail: 'Adres jest punktem wyjścia sprawy, a nie jej wynikiem. Wynik 100% znaczy, że adres należy do sprawy; nie mówi, kto jest jego właścicielem — żadne znalezione konto go nie opublikowało.',
+        evidence: [],
+      });
+      for (const l of vouched.lines) receipt.push({ ...l, total: 100 });
+    }
+    const band: { id: BandId; label: string } = excluded ? { id: 'excluded', label: 'WYKLUCZONE' } : bandOf(ruleset, 100);
+    links.push({
+      clusterId: cluster.id, chain, address, status: excluded ? 'excluded' : 'attributed', score: excluded ? 0 : 100, band: band.id, bandLabel: band.label, receipt, occurrences: [], otherPublishers: [],
+      challenges: excluded ? [] : [{ weight: 'duże', text: 'Nie znaleziono konta, które opublikowało ten adres. Kto nim dysponuje, wie tylko podmiot, który sprawdził tożsamość właściciela.' }],
+      wouldConfirm: excluded ? [] : [
+        ...vouched.vouchers.map((issuer) => `Dane klienta z ${issuer}: podmiot ten sam poświadczył publicznie, że sprawdził tożsamość właściciela tego adresu.`),
+        'Dane giełdy lub usługi, do której trafiły środki z tego adresu.',
+        'Konto w sieci, które opublikuje ten adres albo podpisze wiadomość jego kluczem.',
+      ],
+      account: info && { kind: info.kind, labels: labelsOf(chain, address), txCount: info.txCount, firstSeenAt: info.firstSeenAt, lastSeenAt: info.lastSeenAt, balances: info.balances, delegate: info.delegate },
+    });
   }
 
   // W2: addresses of one wallet stand or fall together. If the person published two addresses that are

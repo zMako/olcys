@@ -28,7 +28,7 @@ export interface WalletMember {
   rule?: 'W1' | 'D2';
 }
 
-export type IndicatorType = 'exchange' | 'p2p' | 'payment_gateway' | 'card' | 'otc' | 'stablecoin_swap' | 'mixer' | 'exchange_inflow';
+export type IndicatorType = 'exchange' | 'p2p' | 'payment_gateway' | 'card' | 'otc' | 'stablecoin_swap' | 'mixer' | 'exchange_inflow' | 'sanctioned' | 'reported';
 
 /**
  * How likely the transfers are a disposal of crypto for traditional currency, goods or services:
@@ -60,10 +60,17 @@ export interface Indicator {
 export interface OffRamp {
   exchange: string;
   chain: string;
+  /** The network built on top of the chain where the deposits were made, if not the main one. */
+  network?: string;
   depositAddress: string;
   /** L1 = the deposit address is labelled; D1 = recognised because everything it received was swept to the exchange. */
   rule: 'L1' | 'D1';
   detail: string;
+  /**
+   * An entity of this name in the Polish register of virtual-currency businesses (kept by the tax administration):
+   * a domestic party the request can be addressed to. A match of names only; NIP and KRS identify the business.
+   */
+  registered?: { number: string; name: string; nip: string; krs?: string; entered: string; struckOff: boolean; suspendedFrom?: string; matched: string; edition: string; status: string };
   deposits: Transfer[];
   sweeps: Transfer[];
 }
@@ -95,7 +102,13 @@ const span = (ts: Transfer[]) => {
 /** A Bitcoin payment funded from several addresses is one transaction, not several. */
 const txCount = (ts: Transfer[]) => new Set(ts.map((t) => t.txHash)).size;
 const times = (n: number) => (n === 1 ? '1 przelew' : n < 5 ? `${n} przelewy` : `${n} przelewów`);
-const head = (name: string) => name.split(':')[0].trim();
+/** The owner of a labelled address without the role of that address: "Binance: Hot Wallet", "Bitget 3", "ByBit Deposit" → the exchange. */
+const SPELLING: Record<string, string> = { bybit: 'Bybit', okx: 'OKX', mexc: 'MEXC', kucoin: 'KuCoin', htx: 'HTX', bitget: 'Bitget', binance: 'Binance', coinbase: 'Coinbase', kraken: 'Kraken' };
+const head = (name: string) => {
+  const owner = name.split(':')[0].replace(/\s+(deposit|hot wallet|cold wallet|wallet|exchange|\d+)$/i, '').replace(/\s+\d+$/, '').trim();
+  // label sources spell the same exchange differently ("ByBit", "Bybit")
+  return SPELLING[owner.toLowerCase()] ?? owner;
+};
 const short = (a: string) => `${a.slice(0, 10)}…${a.slice(-6)}`;
 
 export interface ActivityInput {
@@ -142,21 +155,33 @@ export function analyzeActivity(input: ActivityInput): { activity: ActivitySumma
 
   // D1: an unlabelled address that passes on (nearly) everything it receives to an exchange's wallet is
   // that exchange's deposit address for one customer.
-  const inferred = new Map<string, { label: AddressLabel; sweeps: Transfer[]; share: number }>();
+  const inferred = new Map<string, { label: AddressLabel; sweeps: Transfer[]; share: number; assets: Set<string> }>();
   for (const x of new Set(outgoing.map((t) => t.to))) {
     const hop = input.hops?.get(x);
     if (!hop || input.labelsOf(x).length) continue;
-    const received = total(hop.filter((t) => t.to === x));
-    const sweeps = hop.filter((t) => t.from === x && input.labelsOf(t.to).some((l) => l.category === 'exchange'));
-    const share = received > 0 ? total(sweeps) / received : 0;
-    if (!sweeps.length || share < ruleset.offRamp.minForwardShare) continue;
+    // Counted asset by asset, and only in the assets the wallet itself sent there: amounts of different assets do
+    // not add up, worthless tokens are dropped on every address of some networks, and the history of one asset may
+    // be unavailable. The address counts as a deposit address for the assets it passed on, and only for those.
+    const sent = new Set(outgoing.filter((t) => t.to === x).map((t) => t.asset));
+    const toExchange = hop.filter((t) => t.from === x && sent.has(t.asset) && input.labelsOf(t.to).some((l) => l.category === 'exchange'));
+    const passed = [...sent].map((asset) => {
+      const received = total(hop.filter((t) => t.to === x && t.asset === asset));
+      return { asset, share: received > 0 ? total(toExchange.filter((t) => t.asset === asset)) / received : 0 };
+    }).filter((a) => a.share >= ruleset.offRamp.minForwardShare);
+    const assets = new Set(passed.map((a) => a.asset));
+    const sweeps = toExchange.filter((t) => assets.has(t.asset));
+    if (!sweeps.length) continue;
     const exchange = head(input.labelsOf(sweeps[0].to).find((l) => l.category === 'exchange')!.name);
     inferred.set(x, {
       label: { name: `${exchange}: adres depozytowy`, category: 'exchange_deposit', source: 'reguła D1 (przepływ środków)' },
       sweeps,
-      share,
+      share: Math.min(...passed.map((a) => a.share)),
+      assets,
     });
   }
+  // What a transfer's other side is. A recognised deposit address is one only for the assets it passed on to the exchange.
+  const depositOf = (t: Transfer) => (inferred.get(t.to)?.assets.has(t.asset) ? inferred.get(t.to) : undefined);
+  const labelsTo = (t: Transfer): AddressLabel[] => (inferred.has(t.to) ? (depositOf(t) ? [depositOf(t)!.label] : []) : input.labelsOf(t.to));
   const labels = (a: string): AddressLabel[] => (inferred.has(a) ? [inferred.get(a)!.label] : input.labelsOf(a));
 
   const indicators: Indicator[] = [];
@@ -179,7 +204,7 @@ export function analyzeActivity(input: ActivityInput): { activity: ActivitySumma
   // Outgoing transfers to labelled services, grouped by kind of service.
   const groups = new Map<IndicatorType, { def: NonNullable<(typeof OUTGOING)[LabelCategory]>; ts: Transfer[] }>();
   for (const t of outgoing) {
-    const label = labels(t.to).find((l) => OUTGOING[l.category]);
+    const label = labelsTo(t).find((l) => OUTGOING[l.category]);
     if (!label) continue;
     const def = OUTGOING[label.category]!;
     const g = groups.get(def.type) ?? { def, ts: [] };
@@ -187,7 +212,7 @@ export function analyzeActivity(input: ActivityInput): { activity: ActivitySumma
     groups.set(def.type, g);
   }
   for (const { def, ts } of groups.values()) {
-    const names = [...new Set(ts.map((t) => labels(t.to)[0].name))];
+    const names = [...new Set(ts.map((t) => labelsTo(t)[0].name))];
     const how = ts.some((t) => inferred.has(t.to)) ? ' Adres depozytowy rozpoznano po tym, że wpłaty zostały z niego przekazane na portfel giełdy.' : '';
     make(def, def.type !== 'mixer', ts, `${times(txCount(ts))} ${def.what} (${names.join(', ')}), łącznie ${list(sumBy(ts))}, ${span(ts)}.${how}`, ts.map((t) => t.to));
   }
@@ -200,7 +225,8 @@ export function analyzeActivity(input: ActivityInput): { activity: ActivitySumma
   const swapParties: string[] = [];
   const given: Transfer[] = [];
   for (const legs of byTx.values()) {
-    const out = legs.filter((l) => wallet.has(l.from) && !stable.has(l.asset));
+    // Giving back a deposit receipt for a stablecoin (cUSDCv3, aUSDC…) is a withdrawal of that stablecoin, not a swap into it.
+    const out = legs.filter((l) => wallet.has(l.from) && !stable.has(l.asset) && ![...stable].some((x) => l.asset.toUpperCase().includes(x)));
     const got = legs.filter((l) => wallet.has(l.to) && stable.has(l.asset));
     const value = got.reduce((n, l) => n + l.amount, 0);
     if (out.length && value >= ruleset.indicators.significantStablecoinSwap) {
@@ -220,6 +246,16 @@ export function analyzeActivity(input: ActivityInput): { activity: ActivitySumma
   if (fromExchange.length) {
     make({ type: 'exchange_inflow', rule: 'W8', title: 'Wypłaty z giełdy' }, false, fromExchange, `${times(txCount(fromExchange))} z giełdy, łącznie ${list(sumBy(fromExchange))}, ${span(fromExchange)}.`, fromExchange.map((t) => t.from));
   }
+  // Counterparties on a sanctions list or publicly reported for fraud, in either direction. Not a cash-out: a flag.
+  for (const [category, def, what] of [
+    ['sanctioned', { type: 'sanctioned', rule: 'Z1', title: 'Kontrahent na liście sankcyjnej' }, 'z adresami z listy sankcyjnej'],
+    ['reported', { type: 'reported', rule: 'Z2', title: 'Kontrahent zgłoszony jako oszustwo' }, 'z adresami publicznie zgłoszonymi jako oszustwo (zgłoszenie jest twierdzeniem zgłaszającego, nie ustaleniem)'],
+  ] as const) {
+    const other = (t: Transfer) => (wallet.has(t.from) ? t.to : t.from);
+    const ts = [...outgoing, ...incoming].filter((t) => labels(other(t)).some((l) => l.category === category)).sort((a, b) => a.at.localeCompare(b.at));
+    if (ts.length) make(def, false, ts, `${times(txCount(ts))} ${what}: ${[...new Set(ts.map((t) => labels(other(t))[0].name))].join(', ')}; łącznie ${list(sumBy(ts))}, ${span(ts)}.`, ts.map(other));
+  }
+
   indicators.sort((a, b) => a.rule.localeCompare(b.rule));
 
   // Every exchange address the wallet paid into: the exchange is the party that holds the customer's identity.
@@ -227,15 +263,17 @@ export function analyzeActivity(input: ActivityInput): { activity: ActivitySumma
   for (const x of new Set(outgoing.map((t) => t.to))) {
     const label = labels(x).find((l) => l.category === 'exchange' || l.category === 'exchange_deposit');
     if (!label) continue;
-    const deposits = outgoing.filter((t) => t.to === x);
     const inf = inferred.get(x);
+    const deposits = outgoing.filter((t) => t.to === x && (!inf || inf.assets.has(t.asset)));
+    if (!deposits.length) continue;
     offRamps.push({
       exchange: head(label.name),
       chain: deposits[0].chain,
+      network: deposits[0].network,
       depositAddress: x,
       rule: inf ? 'D1' : 'L1',
       detail: inf
-        ? `Adres ${short(x)} nie ma etykiety, ale ${Math.round(inf.share * 100)}% otrzymanych środków przekazał na oznaczony portfel giełdy ${head(label.name)}. Tak działa adres depozytowy przypisany jednemu klientowi.`
+        ? `Adres ${short(x)} nie ma etykiety, ale ${Math.min(100, Math.round(inf.share * 100))}% otrzymanych środków przekazał na oznaczony portfel giełdy ${head(label.name)}. Tak działa adres depozytowy przypisany jednemu klientowi.`
         : `Adres ${short(x)} jest oznaczony jako „${label.name}” (${label.source}).`,
       deposits,
       sweeps: inf?.sweeps ?? [],

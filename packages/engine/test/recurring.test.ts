@@ -137,3 +137,40 @@ describe('repeated analyses of one case', () => {
     }
   }, 30_000);
 });
+
+describe('audit log', () => {
+  it('records who did what, in order, and notices when an entry is altered', async () => {
+    const c = await store.createCase('audit', [makeIdentifier('username', 'audyt_test')]);
+    await store.audit({ actor: 'a.nowak', action: 'analysis.started', caseId: c.id, detail: { identifiers: ['username: audyt_test'], sources: 'synthetic', nested: { z: 1, a: 2 } } });
+    await store.audit({ actor: 'harmonogram', action: 'analysis.scheduled', caseId: c.id });
+    await store.audit({ actor: 'a.nowak', action: 'report.exported', caseId: c.id, detail: { format: 'pdf' } });
+    const trail = await store.auditTrail({ caseId: c.id });
+    expect(trail.map((e) => [e.actor, e.action])).toEqual([['a.nowak', 'report.exported'], ['harmonogram', 'analysis.scheduled'], ['a.nowak', 'analysis.started']]);
+    expect(trail[2].detail).toEqual({ identifiers: ['username: audyt_test'], sources: 'synthetic', nested: { z: 1, a: 2 } });
+    expect(new Set(trail.map((e) => e.hash)).size).toBe(3);
+    expect(await store.verifyAudit()).toMatchObject({ intact: true });
+    // someone rewrites history
+    await db.query("UPDATE audit_log SET actor = 'ktos.inny' WHERE id = $1", [trail[1].id]);
+    expect(await store.verifyAudit()).toMatchObject({ intact: false, brokenAt: trail[1].id });
+  });
+});
+
+describe('a source that fails', () => {
+  it('does not cost the analysis its result, and the result says what could not be read', async () => {
+    const seeds = [makeIdentifier('username', 'szklane_domy')];
+    const c = await store.createCase('gaps', seeds);
+    const [first, ...rest] = deps.connectors;
+    // one source is down: every search of it throws
+    const down = { ...first, descriptor: first.descriptor, search: async function* () { throw new Error('connect ETIMEDOUT'); } } as unknown as typeof first;
+    const summary = await runAnalysis({ ...deps, connectors: [down, ...rest] }, c.id);
+    expect(summary.status).toBe('completed');
+    expect(summary.gaps!.length).toBeGreaterThan(0);
+    expect(summary.gaps![0]).toMatchObject({ source: first.id });
+    expect(summary.gaps![0].message).toContain('ETIMEDOUT');
+    // the other sources still gave their part
+    expect(summary.counts.documents).toBeGreaterThan(0);
+    // a healthy run records nothing
+    const clean = await runAnalysis(deps, (await store.createCase('no gaps', seeds)).id);
+    expect(clean.gaps).toEqual([]);
+  });
+});

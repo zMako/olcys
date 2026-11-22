@@ -215,7 +215,7 @@ export function generateChain(world: Pick<World, 'personas' | 'seed' | 'now'>, h
   // One ordinary user has upgraded their address with an EIP-7702 delegation: it has bytecode but is still a personal wallet.
   // A forum user who only dropped an address in a discussion, but whose address carries a name pointing back at the forum nick.
   const named = world.personas.filter((p) => p.archetype === 'forum_talker' && p.wallets[0]?.kind === 'eth')[2];
-  if (named) chain.names.push({ name: `${named.handles.forum!.replace(/[^a-z0-9]/g, '')}.eth`, address: named.wallets[0].address, personaId: named.id, records: { 'com.twitter': named.handles.forum! } });
+  if (named) chain.names.push({ name: `${named.handles.forum!.replace(/[^a-z0-9]/g, '')}.eth`, address: named.wallets[0].address, personaId: named.id, records: { 'pl.bitrozmowy': named.handles.forum! } });
 
   const delegated = world.personas.find((p) => p.archetype === 'open_dev')?.wallets.find((x) => x.kind === 'eth');
   if (delegated) chain.codes[delegated.address] = '0xef0100' + sha256Hex('delegate').slice(0, 40);

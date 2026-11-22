@@ -1,8 +1,11 @@
+import { reportedForFraud, sanctioned } from './sanctions';
 import type { Chain } from './chains';
 
 export type LabelCategory =
   | 'exchange' | 'exchange_deposit' | 'p2p' | 'payment_gateway' | 'card' | 'otc'
-  | 'dex' | 'token' | 'contract' | 'mixer' | 'charity' | 'bridge' | 'other';
+  | 'dex' | 'token' | 'contract' | 'mixer' | 'charity' | 'bridge' | 'other'
+  /** On a sanctions list, or publicly reported for fraud. Unlike the others these do not mark a service: a person's address can be listed. */
+  | 'sanctioned' | 'reported';
 
 export interface AddressLabel {
   name: string;
@@ -42,5 +45,11 @@ const byAddress = new Map(BUNDLED_LABELS.map((l) => [`${l.chain}:${l.address}`, 
 
 export function bundledLabel(chain: string, address: string): AddressLabel | undefined {
   const l = byAddress.get(`${chain}:${address}`);
-  return l && { name: l.name, category: l.category, source: l.source };
+  if (l) return { name: l.name, category: l.category, source: l.source };
+  // Two bundled public lists: sanctions, and addresses reported for fraud. A report is someone's claim, not a finding.
+  const listed = sanctioned(chain, address);
+  if (listed) return { name: `Lista sankcyjna ${listed.list}`, category: 'sanctioned', source: `${listed.source} (stan na ${listed.retrieved})` };
+  const reported = reportedForFraud(chain, address);
+  if (reported) return { name: `Zgłoszony jako oszustwo${reported.comment ? `: ${reported.comment.slice(0, 80)}` : ''}`, category: 'reported', source: `${reported.source} (stan na ${reported.retrieved})` };
+  return undefined;
 }

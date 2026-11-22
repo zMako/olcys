@@ -25,10 +25,21 @@ export interface CrawlRef {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Small ranged requests are cheap to send and easy to send too many of: twice the storage answered 403 to this
+// address after a burst. They are therefore paced, however many callers wait.
+const RANGED_PER_SECOND = Number(process.env.CC_REQUESTS_PER_SECOND ?? 8);
+let nextRanged = 0;
+async function rangedTurn(): Promise<void> {
+  const at = Math.max(Date.now(), nextRanged);
+  nextRanged = at + 1000 / RANGED_PER_SECOND;
+  if (at > Date.now()) await sleep(at - Date.now());
+}
+
 /** GET with a few patient retries: the storage occasionally answers 503 under load. */
 export async function ccFetch(url: string, init: { range?: [number, number] } = {}, attempts = 4): Promise<Response> {
   let last: unknown;
   for (let i = 0; i < attempts; i++) {
+    if (init.range) await rangedTurn();
     try {
       const res = await fetch(url, { headers: { 'user-agent': USER_AGENT, ...(init.range ? { range: `bytes=${init.range[0]}-${init.range[1]}` } : {}) } });
       if (res.ok) return res;

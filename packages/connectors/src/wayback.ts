@@ -20,7 +20,8 @@ export function createWaybackConnector(base = 'https://web.archive.org', limit =
   };
 }
 
-const PRODUCTS: Record<string, string> = { BTC: 'BTC-USD', ETH: 'ETH-USD' };
+// Wrapped ether and wrapped bitcoin are worth what they wrap.
+const PRODUCTS: Record<string, string> = { BTC: 'BTC-USD', ETH: 'ETH-USD', WETH: 'ETH-USD', WBTC: 'BTC-USD' };
 
 /** Daily closing prices from the public market-data API of Coinbase Exchange. */
 export function createCoinbasePriceConnector(base = 'https://api.exchange.coinbase.com'): PriceConnector {
@@ -32,8 +33,16 @@ export function createCoinbasePriceConnector(base = 'https://api.exchange.coinba
       const product = PRODUCTS[asset];
       if (!product) return undefined;
       const url = `${root}/products/${product}/candles?granularity=86400&start=${date}T00:00:00Z&end=${date}T00:00:00Z`;
-      const res = await ctx.fetch(url);
-      if (res.status !== 200) return undefined;
+      let res = await ctx.fetch(url);
+      // A refusal for asking too fast is answered by waiting and asking again; a price silently missing would understate the estimate.
+      for (let attempt = 2; attempt <= 4 && (res.status === 429 || res.status >= 500); attempt++) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+        res = await ctx.fetch(url);
+      }
+      if (res.status !== 200) {
+        ctx.log(`kurs ${asset} z dnia ${date}: odpowiedź ${res.status}`);
+        return undefined;
+      }
       const candle = (JSON.parse(res.body) as number[][])[0]; // [time, low, high, open, close, volume]
       return candle ? { asset, usd: candle[4], date, source: 'dzienny kurs zamknięcia, Coinbase Exchange', url, snapshotId: res.snapshotId } : undefined;
     },

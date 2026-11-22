@@ -8,6 +8,8 @@ export interface SchedulerOptions {
   /** How often to look for due cases. */
   intervalMs?: number;
   log?: (message: string) => void;
+  /** Called for every run the schedule starts, so it can be written to the audit log. */
+  onRun?(caseId: string, runId: string): void | Promise<void>;
 }
 
 /**
@@ -26,6 +28,7 @@ export function startScheduler(opts: SchedulerOptions) {
         await opts.store.bumpSchedule(due.case_id, due.every_seconds);
         const run = await beginRun(opts.depsFor(due.sources), due.case_id, {}, 'schedule');
         run.done.catch((err) => opts.log?.(`scheduled run ${run.runId} failed: ${err instanceof Error ? err.message : err}`));
+        await opts.onRun?.(due.case_id, run.runId);
         started.push(run.runId);
       }
     } catch (err) {

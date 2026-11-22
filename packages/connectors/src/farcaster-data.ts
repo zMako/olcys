@@ -91,3 +91,25 @@ export function parseFarcasterCasts(json: Json | undefined): FarcasterCast[] {
   }
   return out;
 }
+
+/**
+ * Reads a profile from the protocol node's answer (the account's own signed "user data" messages).
+ * The node holds the same facts as the client API, with the stated location as coordinates ("geo:52.23,21.01").
+ */
+export function parseFarcasterUserData(json: Json | undefined, fid: number): (FarcasterProfile & { geo?: string }) | undefined {
+  const values: Record<string, string> = {};
+  for (const m of (json?.messages ?? []) as Json[]) {
+    const b = m.data?.userDataBody;
+    if (b?.type && typeof b.value === 'string') values[String(b.type)] = b.value;
+  }
+  if (!Object.keys(values).length) return undefined;
+  const clean = (s: string | undefined) => (s && s.replace(/[\u200b-\u200d\ufeff]/g, '').trim()) || undefined;
+  const connected: { platform: string; username: string }[] = [];
+  if (clean(values.USER_DATA_TYPE_TWITTER)) connected.push({ platform: 'x', username: clean(values.USER_DATA_TYPE_TWITTER)! });
+  if (clean(values.USER_DATA_TYPE_GITHUB)) connected.push({ platform: 'github', username: clean(values.USER_DATA_TYPE_GITHUB)! });
+  const primary = parseAddress(values.USER_DATA_PRIMARY_ADDRESS_ETHEREUM ?? '')?.address;
+  return {
+    fid, username: clean(values.USER_DATA_TYPE_USERNAME), displayName: clean(values.USER_DATA_TYPE_DISPLAY), bio: clean(values.USER_DATA_TYPE_BIO),
+    url: clean(values.USER_DATA_TYPE_URL), geo: clean(values.USER_DATA_TYPE_LOCATION), followers: 0, following: 0, wallets: primary ? [primary] : [], connected,
+  };
+}

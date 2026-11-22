@@ -1,12 +1,16 @@
 import { parseHtml, textOf } from '@olcys/connectors';
 import {
-  bundledLabel, extractAddresses, findCryptoAmounts, findPlnAmounts, findSignedMessages, identifierKey, makeIdentifier, similarHandle, usernameVariants, verifySignedMessage,
-  type ArchiveConnector, type Deployment, type FetchInit, type NameRecord, type NameService, type SourceItem, type AccountInfo, type AddressLabel, type Chain, type ChainConnector, type Identifier, type PriceConnector, type PriceQuote,
+  bundledLabel, extractAddresses, findCryptoAmounts, findPlnAmounts, findSignedMessages, identifierKey, makeIdentifier, parseAddress, similarHandle, usernameVariants, verifySignedMessage,
+  type AddressAttestation, type ArchiveConnector, type Deployment, type FetchInit, type NameRecord, type NameService, type SourceItem, type AccountInfo, type AddressLabel, type Chain, type ChainConnector, type Identifier, type PriceConnector, type PriceQuote,
   type RateQuote, type RatesConnector, type SourceConnector, type Transfer,
 } from '@olcys/core';
+import type { Finding, Lead } from '@olcys/core';
+import { findRegisteredVasp, registeredVasps } from '@olcys/core/vasp-pl';
+import { polishNameFrequency } from '@olcys/core/names-pl';
+import type { RunFacts } from '@olcys/scoring';
 import type { MentionView, Store } from '@olcys/db';
 import {
-  DEFAULT_RULESET, analyzeActivity, assess, buildEstimate, matchAmounts, valueTransfer, warsawDay,
+  DEFAULT_RULESET, RECORD_SERVICES, analyzeActivity, assess, buildEstimate, matchAmounts, valueTransfer, warsawDay,
   type ActivitySummary, type Assessment, type CandidateTransfer, type Estimate, type Indicator, type OffRamp, type Ruleset, type ValuedTransfer, type WalletMember,
 } from '@olcys/scoring';
 import { readImage } from '@olcys/vision';
@@ -14,7 +18,42 @@ import { compareRuns, type RunDiff } from './diff';
 import { EgressDeniedError, createEgress } from './egress';
 import type { RunEvent } from './events';
 
-export const ENGINE_VERSION = '0.9.0';
+/**
+ * A rough worth of a transfer, used for one thing only: choosing which recipients to follow first. Amounts of
+ * different assets cannot be compared directly, and on some networks worthless tokens arrive in the millions.
+ * No reported figure depends on these weights.
+ */
+const ROUGH: Record<string, number> = { BTC: 60_000, WBTC: 60_000, ETH: 3_000, WETH: 3_000 };
+const roughValue = (t: Transfer, stablecoins: string[]) => t.amount * (stablecoins.includes(t.asset) ? 1 : ROUGH[t.asset] ?? 1e-9);
+
+/**
+ * The stored facts of a run plus what bundled reference data says about them: how common the entered names are
+ * in Poland. Scoring itself stays a pure function of these facts.
+ */
+async function factsOf(store: Store, runId: string) {
+  const facts = await store.runFacts(runId);
+  const nameFrequency: NonNullable<RunFacts['nameFrequency']> = {};
+  for (const seed of facts.seeds) {
+    if (seed.kind !== 'full_name') continue;
+    const f = polishNameFrequency(seed.value);
+    if (f) nameFrequency[seed.normalized] = f;
+  }
+  return { ...facts, nameFrequency };
+}
+
+/** Adds, for each exchange the wallet paid into, the entity of that name in the Polish register of virtual-currency businesses. */
+function withRegister<T extends { offRamps: OffRamp[] }>(result: T): T {
+  const { edition, status } = registeredVasps();
+  return {
+    ...result,
+    offRamps: result.offRamps.map((o) => {
+      const m = findRegisteredVasp(o.exchange);
+      return m ? { ...o, registered: { number: m.number, name: m.name, nip: m.nip, krs: m.krs, entered: m.entered, struckOff: m.struckOff, suspendedFrom: m.suspendedFrom, matched: m.matched, edition, status } } : o;
+    }),
+  };
+}
+
+export const ENGINE_VERSION = '0.10.0';
 
 /** Search parameters of a run. Stored with the run so it can be repeated exactly. */
 export interface RunParams {
@@ -47,7 +86,7 @@ export interface RunParams {
   maxDeployedLookups: number;
 }
 
-export const DEFAULT_PARAMS: RunParams = { maxDepth: 3, pivotOnAddresses: true, maxIdentifiers: 160, maxChainAddresses: 25, maxCounterparties: 40, maxHops: 8,
+export const DEFAULT_PARAMS: RunParams = { maxDepth: 3, pivotOnAddresses: true, maxIdentifiers: 160, maxChainAddresses: 25, maxCounterparties: 40, maxHops: 12,
   maxImages: 40, maxArchivedProfiles: 6, maxCapturesPerProfile: 5, maxRounds: 3, maxWalletSearches: 30, maxNameLookups: 20, maxSimilarHandles: 6, maxDeployedLookups: 12,
 };
 
@@ -125,10 +164,25 @@ export interface RunSummary {
   estimate?: Estimate;
   /** On-chain names of found addresses (source facts). */
   names: (NameRecord & { verified: boolean })[];
+  /** What institutions publicly attest about the person's addresses (source facts). */
+  attestations?: AddressAttestation[];
   /** What the person's own posts say about their crypto (computed; each statement points at its source). */
   reading?: { posts: number; generated: number; read: number; statements: StoredStatement[] };
   /** A description of the case written by the language model from the findings above (to verify). */
   narrative?: { model: string; text: string; createdAt: string };
+  /**
+   * A description of the case written by the language model and checked sentence by sentence: every sentence
+   * names the findings it rests on; sentences that failed the check are kept apart, with the reason.
+   */
+  dossier?: { model: string; createdAt: string; findings: Finding[]; sentences: { text: string; cites: string[] }[]; rejected: { text: string; reason: string }[] };
+  /** Open leads, in the order the model suggests (the leads themselves come from fixed rules). */
+  triage?: { model: string; createdAt: string; byModel: boolean; leads: (Lead & { reason: string })[] };
+  /** The model's opinion on unconfirmed accounts: same person or not, with the quotes it rests on. */
+  judgements?: { origin: string; handle: string; source?: string; scope?: 'unconfirmed' | 'same_nick'; verdict: 'same' | 'different' | 'unclear'; reasons: string[]; rejected: number; model: string }[];
+  /** Model-written reasoning for request drafts, keyed by what the request is about. */
+  /** Sources that failed during the run: the result may be missing what they would have shown. */
+  gaps?: { source: string; message: string; times: number }[];
+  requestNotes?: { key: string; addressee: string; sentences: { text: string; cites: string[] }[]; rejected: { text: string; reason: string }[] }[];
 }
 
 /**
@@ -196,7 +250,15 @@ export async function beginRun(
     return store.addEvent(run.id, ++seq, type, payload);
   };
   const egress = createEgress({ store, runId: run.id, allowlist: deps.allowlist, fetchImpl: deps.fetchImpl });
-  const ctxFor = (id: string) => ({ fetch: (url: string, init?: FetchInit) => egress.text(id, url, init), log: (m: string) => log(`[${id}] ${m}`) });
+  // A source that fails leaves a hole in the result. Every such failure is written down with the run, so that an
+  // incomplete result says it is incomplete.
+  const gapWrites: Promise<void>[] = [];
+  const gap = (source: string, message: string) => {
+    log(`[${source}] ${message}`);
+    gapWrites.push(store.saveGap(run.id, source, message).catch(() => undefined));
+  };
+  // Connectors use their log only to report something they could not read.
+  const ctxFor = (id: string) => ({ fetch: (url: string, init?: FetchInit) => egress.text(id, url, init), log: (m: string) => gap(id, m) });
   const accountKey = (origin: string, handle: string) => `${origin}:${handle.toLowerCase()}`;
 
   // ------------------------------------------------------------------ state shared by the stages
@@ -274,8 +336,8 @@ export async function beginRun(
             if (own && doc.created) for (const lead of item.discovered) await enqueue(lead, depth + 1, 'discovered', doc.id);
           }
         } catch (err) {
-          if (err instanceof EgressDeniedError) log(`[${connector.id}] ${err.message}`);
-          else throw err;
+          // One source that is down, slow or refusing must not cost the whole analysis; the hole it leaves is recorded.
+          gap(connector.id, `${id.kind} „${id.value}”: ${err instanceof Error ? err.message : err}`);
         }
       }
     }
@@ -358,7 +420,7 @@ export async function beginRun(
           }
         }
       } catch (err) {
-        log(`[${connector.id}] ${image.url}: ${err instanceof Error ? err.message : err}`);
+        gap(connector.id, `${image.url}: ${err instanceof Error ? err.message : err}`);
       }
     }
   };
@@ -398,7 +460,7 @@ export async function beginRun(
           }
         }
       } catch (err) {
-        log(`[${archive.id}] ${p.item.url}: ${err instanceof Error ? err.message : err}`);
+        gap(archive.id, `${p.item.url}: ${err instanceof Error ? err.message : err}`);
       }
     }
   };
@@ -415,12 +477,18 @@ export async function beginRun(
       known.set(key, info);
       return info;
     } catch (err) {
-      log(`[${connector.id}] ${address}: ${err instanceof Error ? err.message : err}`);
+      gap(connector.id, `${address}: ${err instanceof Error ? err.message : err}`);
       return undefined;
     }
   };
+  /** Looks up several addresses at a time; the order of the results does not matter, only that they are known afterwards. */
+  const lookupAll = async (chain: Chain, addresses: string[]) => {
+    for (let i = 0; i < addresses.length; i += 6) await Promise.all(addresses.slice(i, i + 6).map((a) => lookup(chain, a)));
+  };
   const lookupFound = async () => {
-    for (const m of await store.mentions(run.id)) {
+    // Addresses the analyst entered are looked up like the ones found on the web: they are part of the case either way.
+    const entered = seeds.filter((x) => x.kind === 'crypto_address').map((x) => parseAddress(x.value)).filter((x): x is NonNullable<typeof x> => !!x);
+    for (const m of [...entered, ...(await store.mentions(run.id))]) {
       const key = `${m.chain}:${m.address}`;
       if (lookedUp.has(key)) continue;
       lookedUp.add(key);
@@ -455,7 +523,8 @@ export async function beginRun(
       await store.saveNameRecord(run.id, { ...record, verified: true });
       await emit({ type: 'name', chain: record.chain, address, name: record.name, records: record.records });
       for (const [key, value] of Object.entries(record.records)) {
-        if (['com.github', 'com.twitter', 'org.telegram'].includes(key)) await enqueue(makeIdentifier('username', value.replace(/^@/, '')), 1, 'name');
+        if (key !== 'xyz.farcaster' && RECORD_SERVICES[key]) await enqueue(makeIdentifier('username', value.replace(/^@/, '')), 1, 'name');
+        else if (key === 'xyz.farcaster' && /^[a-z0-9][a-z0-9.-]{0,24}$/i.test(value.replace(/^@/, ''))) await enqueue(makeIdentifier('profile_url', `https://farcaster.xyz/${value.replace(/^@/, '').toLowerCase()}`), 1, 'name');
         else if (key === 'email') await enqueue(makeIdentifier('email', value), 1, 'name');
         else if (key === 'url' && /^https?:\/\//i.test(value)) await enqueue(makeIdentifier('profile_url', value), 1, 'name');
       }
@@ -496,7 +565,7 @@ export async function beginRun(
     try {
       list = await connector.getDeployed(chain, address, ctxFor(connector.id));
     } catch (err) {
-      log(`[${connector.id}] ${address}: ${err instanceof Error ? err.message : err}`);
+      gap(connector.id, `${address}: ${err instanceof Error ? err.message : err}`);
     }
     for (const dep of list.slice(0, 10)) {
       if (!(await noteDeployment(dep))) continue;
@@ -514,7 +583,7 @@ export async function beginRun(
       if (!leadQueue.length && !addressQueue.length) break;
     }
   };
-  const score = async () => assess(await store.runFacts(run.id), ruleset);
+  const score = async () => assess(await factsOf(store, run.id), ruleset);
   const firmClusters = (a: Assessment) => a.clusters.filter((c) => c.level === 'entered' || c.level === 'publisher');
 
   /** Tells the interface what changed in who the person is and how each address scores. */
@@ -592,17 +661,50 @@ export async function beginRun(
 
         // Who did the wallet pay, and who paid it? Recipients first: leaving crypto is about where the money went.
         const outgoing = transfers.filter((t) => members.has(t.from) && !members.has(t.to));
-        const parties = [...new Set([...outgoing.map((t) => t.to), ...transfers.filter((t) => members.has(t.to) && !members.has(t.from)).map((t) => t.from)])];
-        for (const p of parties.slice(0, params.maxCounterparties)) await lookup(chain, p);
+        const incoming = transfers.filter((t) => members.has(t.to) && !members.has(t.from));
+        let parties = [...new Set([...outgoing.map((t) => t.to), ...incoming.map((t) => t.from)])];
+        if (parties.length > params.maxCounterparties) {
+          // A busy wallet has more counterparties than can be looked up one by one. Those with a public label come
+          // first (one cheap request tells which), then recipients and senders by the rough worth of what moved.
+          const byWorth = (ts: Transfer[], who: (t: Transfer) => string) => {
+            const m = new Map<string, number>();
+            for (const t of ts) m.set(who(t), (m.get(who(t)) ?? 0) + roughValue(t, ruleset.indicators.stablecoins));
+            return [...m].sort((p, q) => q[1] - p[1]).map(([a]) => a);
+          };
+          const [recipients, senders] = [byWorth(outgoing, (t) => t.to), byWorth(incoming, (t) => t.from)];
+          const flagged = connector.getLabelled ? await connector.getLabelled(chain, [...recipients.slice(0, 600), ...senders.slice(0, 200)], ctx).catch(() => [] as string[]) : [];
+          const share = Math.ceil(params.maxCounterparties * 0.75);
+          parties = [...new Set([...flagged.slice(0, params.maxCounterparties), ...recipients.slice(0, share), ...senders.slice(0, params.maxCounterparties - share)])];
+        }
+        await lookupAll(chain, parties);
 
         // One step further for unlabelled recipients: did the money go on to an exchange?
         const hops = new Map<string, Transfer[]>();
         const byValue = new Map<string, number>();
-        for (const t of outgoing) if (!labelled(t.to).length) byValue.set(t.to, (byValue.get(t.to) ?? 0) + t.amount);
-        for (const [x] of [...byValue].sort((p, q) => q[1] - p[1]).slice(0, params.maxHops)) {
-          const next = await connector.getTransfers(chain, x, ctx);
+        for (const t of outgoing) if (!labelled(t.to).length) byValue.set(t.to, (byValue.get(t.to) ?? 0) + roughValue(t, ruleset.indicators.stablecoins));
+        // An exchange gives a customer an ordinary address to deposit to, never a contract; contracts are not followed.
+        const followable = [...byValue].filter(([x]) => known.get(`${chain}:${x}`)?.kind !== 'contract');
+        const toFollow = followable.sort((p, q) => q[1] - p[1]).slice(0, params.maxHops).map(([x]) => x);
+        // Histories are independent of each other, so a few are read at a time.
+        const histories = new Map<string, Transfer[]>();
+        for (let i = 0; i < toFollow.length; i += 3) {
+          await Promise.all(toFollow.slice(i, i + 3).map(async (x) => {
+            // One recipient whose history cannot be read (too large, too slow) must not cost the whole wallet its analysis.
+            histories.set(x, await connector.getTransfers(chain, x, ctx).catch((err) => {
+              gap(connector.id, `${x}: ${err instanceof Error ? err.message : err}`);
+              return [] as Transfer[];
+            }));
+          }));
+        }
+        for (const x of toFollow) {
+          const next = histories.get(x)!;
           hops.set(x, next);
-          for (const to of new Set(next.filter((t) => t.from === x).map((t) => t.to))) await lookup(chain, to);
+          // A deposit address passes funds on to a handful of the exchange's wallets. An address paying many
+          // recipients is something else; only its labelled recipients are worth a look.
+          const onward = [...new Set(next.filter((t) => t.from === x).map((t) => t.to))];
+          if (onward.length <= 25) await lookupAll(chain, onward);
+          else if (connector.getLabelled) await lookupAll(chain, (await connector.getLabelled(chain, onward.slice(0, 400), ctx).catch(() => [] as string[])).slice(0, 12));
+          else await lookupAll(chain, onward.slice(0, 25));
         }
 
         const data: WalletData = { chain, root: address, wallet, members, transfers, hops };
@@ -613,7 +715,7 @@ export async function beginRun(
         // paying into the same one belongs to the same customer.
         let siblings = 0;
         for (const off of result.offRamps) {
-          if (!hops.has(off.depositAddress)) hops.set(off.depositAddress, await connector.getTransfers(chain, off.depositAddress, ctx));
+          if (!hops.has(off.depositAddress)) hops.set(off.depositAddress, await connector.getTransfers(chain, off.depositAddress, ctx).catch(() => [] as Transfer[]));
           const paidIn = hops.get(off.depositAddress)!.filter((t) => t.to === off.depositAddress && !members.has(t.from));
           const senders = [...new Set(paidIn.map((t) => t.from))];
           if (!senders.length || senders.length > ruleset.depositReuse.maxOtherSenders) continue; // too many payers: not one customer's address
@@ -623,7 +725,7 @@ export async function beginRun(
             if (labelled(sender).length || info?.kind === 'contract') continue;
             members.add(sender);
             wallet.push({ address: sender, via: { txHash: paidIn.find((t) => t.from === sender)!.txHash, with: off.depositAddress }, rule: 'D2' });
-            const own = await connector.getTransfers(chain, sender, ctx);
+            const own = await connector.getTransfers(chain, sender, ctx).catch(() => [] as Transfer[]);
             await store.saveTransfers(run.id, address, own);
             transfers.push(...own);
             siblings++;
@@ -634,7 +736,7 @@ export async function beginRun(
           await emit({ type: 'wallet', chain, address, members: wallet.length, rule: 'D2' });
           result = analyzeActivity({ addresses: [...members], related: relatedTo(a, data), transfers, labelsOf: labelled, hops, ruleset });
         }
-        await store.saveActivity(run.id, chain, address, { ...result, wallet });
+        await store.saveActivity(run.id, chain, address, { ...withRegister(result), wallet });
         await emit({ type: 'activity', chain, address, transfers: result.activity.transfers });
         for (const i of result.indicators) {
           await emit({
@@ -643,8 +745,24 @@ export async function beginRun(
           });
         }
       } catch (err) {
-        log(`[${connector.id}] ${address}: ${err instanceof Error ? err.message : err}`);
+        gap(connector.id, `${address}: ${err instanceof Error ? err.message : err}`);
       }
+    }
+  };
+
+  /** Asks, for every address attributed to the person, whether an institution publicly vouches for its owner. */
+  const attested = new Set<string>();
+  const attestationStage = async (a: Assessment) => {
+    const firm = new Set(firmClusters(a).map((c) => c.id));
+    for (const l of a.links) {
+      const key = `${l.chain}:${l.address}`;
+      if (l.status !== 'attributed' || !firm.has(l.clusterId) || attested.has(key)) continue;
+      attested.add(key);
+      const connector = chainConnectors.find((c) => c.supports(l.chain as Chain));
+      if (!connector?.getAttestations) continue;
+      const list = await connector.getAttestations(l.chain as Chain, l.address, ctxFor(connector.id)).catch(() => [] as AddressAttestation[]);
+      await store.saveAttestations(run.id, list);
+      for (const x of list) await emit({ type: 'attestation', chain: x.chain, address: x.address, issuer: x.issuer, claim: x.claim, value: x.value });
     }
   };
 
@@ -653,7 +771,7 @@ export async function beginRun(
     const out: AddressActivity[] = [];
     for (const w of wallets.values()) {
       const result = analyzeActivity({ addresses: [...w.members], related: relatedTo(a, w), transfers: w.transfers, labelsOf: labelsOf(w.chain), hops: w.hops, ruleset });
-      await store.saveActivity(run.id, w.chain, w.root, { ...result, wallet: w.wallet });
+      await store.saveActivity(run.id, w.chain, w.root, { ...withRegister(result), wallet: w.wallet });
       out.push({ chain: w.chain, address: w.root, wallet: w.wallet, ...result });
     }
     return out;
@@ -831,7 +949,7 @@ export async function beginRun(
             try {
               handles = await connector.enumerate(makeIdentifier('username', spelling), ctxFor(connector.id));
             } catch (err) {
-              log(`[${connector.id}] ${err instanceof Error ? err.message : err}`);
+              gap(connector.id, `${err instanceof Error ? err.message : err}`);
             }
             for (const handle of handles) {
               const id = makeIdentifier('username', handle);
@@ -859,6 +977,10 @@ export async function beginRun(
         await announce(assessment);
       }
       await analyseWallets(assessment);
+      await attestationStage(assessment);
+      // Score once more with everything the chain has told us: wallets and transfers feed the rules too.
+      assessment = await score();
+      await announce(assessment);
       let analysed = await finalActivities(assessment);
 
       if (await matchStated(assessment)) {
@@ -886,6 +1008,7 @@ export async function beginRun(
     }
 
     const counts = await store.counts(run.id);
+    await Promise.all(gapWrites);
     await emit({ type: 'run.finished', status, error, counts });
     await store.finishRun(run.id, status, counts, error);
     return { ...(await summarizeRun(store, run.id)), status, error };
@@ -910,7 +1033,7 @@ export async function diffRuns(store: Store, runId: string, againstId?: string):
 
 /** Scores a stored run again, e.g. with changed rules. The earlier assessment is kept. */
 export async function reassessRun(store: Store, runId: string, ruleset: Ruleset = DEFAULT_RULESET): Promise<RunSummary> {
-  await store.saveAssessment(runId, ruleset, assess(await store.runFacts(runId), ruleset));
+  await store.saveAssessment(runId, ruleset, assess(await factsOf(store, runId), ruleset));
   return summarizeRun(store, runId);
 }
 
@@ -959,7 +1082,13 @@ export async function summarizeRun(store: Store, runId: string): Promise<RunSumm
     chain: { accounts: await store.chainAccounts(runId), activity: await store.activities<AddressActivity>(runId) },
     estimate: await store.estimate<Estimate>(runId),
     names: await store.nameRecords<NameRecord & { verified: boolean }>(runId),
+    attestations: await store.attestations(runId),
     reading: await store.reading<StoredStatement['detail']>(runId),
     narrative: await store.narrative(runId),
+    gaps: await store.gaps(runId),
+    dossier: (await store.modelOutputs<Omit<NonNullable<RunSummary['dossier']>, 'model' | 'createdAt'>>(runId, 'dossier')).map((o) => ({ ...o.payload, model: o.model, createdAt: o.createdAt }))[0],
+    triage: (await store.modelOutputs<Omit<NonNullable<RunSummary['triage']>, 'model' | 'createdAt'>>(runId, 'triage')).map((o) => ({ ...o.payload, model: o.model, createdAt: o.createdAt }))[0],
+    judgements: (await store.modelOutputs<Omit<NonNullable<RunSummary['judgements']>[number], 'model'>>(runId, 'judgement')).map((o) => ({ ...o.payload, model: o.model })),
+    requestNotes: (await store.modelOutputs<Omit<NonNullable<RunSummary['requestNotes']>[number], 'key'>>(runId, 'request')).map((o) => ({ ...o.payload, key: o.key })),
   };
 }

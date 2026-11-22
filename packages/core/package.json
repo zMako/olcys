@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./names-pl": "./src/names-pl.ts",
+    "./vasp-pl": "./src/vasp-pl.ts",
+    "./sanctions": "./src/sanctions.ts"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",

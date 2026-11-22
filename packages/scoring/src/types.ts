@@ -1,4 +1,4 @@
-import type { AccountInfo, Deployment, Fingerprint, Identifier, NameRecord } from '@olcys/core';
+import type { AccountInfo, AddressAttestation, Deployment, Fingerprint, Identifier, NameRecord } from '@olcys/core';
 import type { AmountMatch } from './amounts';
 import type { ProfileHistory } from './history';
 import type { WalletMember } from './indicators';
@@ -23,6 +23,18 @@ export interface RunFacts {
   sources?: Record<string, string>;
   /** Contracts and the addresses that created them, as far as the run looked them up. */
   deployments?: Deployment[];
+  /** What institutions publicly attest about the person's addresses (e.g. an exchange's "verified customer"). */
+  attestations?: AddressAttestation[];
+  /**
+   * How many people in Poland bear an entered first name and surname, by the PESEL register's published
+   * statistics. Keyed by the normalised name. `expected` assumes first names and surnames combine independently.
+   */
+  nameFrequency?: Record<string, { first: string; last: string; firstCount: number; lastCount: number; expected: number; edition: string }>;
+  /**
+   * A language model's opinion on whether an unconfirmed account belongs to the person. It never joins accounts;
+   * it moves the scores of that account's addresses a little, below the limit the identity sets.
+   */
+  opinions?: { origin: string; handle: string; verdict: 'same' | 'different' | 'unclear'; reasons: string[]; model: string }[];
   /** Value movements on the analysed wallets (`subject` is the published address of the wallet). */
   transfers?: { subject: string; chain: string; txHash: string; at: string; from: string; to: string }[];
 }

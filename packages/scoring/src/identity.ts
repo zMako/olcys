@@ -6,6 +6,12 @@ export const accountKeyOf = (d: Pick<DocFact, 'origin' | 'authorHandle'>): strin
   d.authorHandle ? `${d.origin}:${d.authorHandle.toLowerCase()}` : undefined;
 
 const HARD_KINDS = new Set(['email', 'phone', 'messenger_id', 'profile_url']);
+/** Which sources a name record speaks about: "com.github: x" points at the account x on a code host, and nowhere else. */
+export const RECORD_SERVICES: Record<string, string[]> = {
+  'com.github': ['github', 'kodownia'], 'com.twitter': ['x', 'twitter'], 'org.telegram': ['telegram'], 'xyz.farcaster': ['farcaster'],
+  // the forum of the synthetic environment, under its own record key
+  'pl.bitrozmowy': ['bitrozmowy'],
+};
 const KIND_PL: Record<string, string> = { email: 'adres e-mail', phone: 'numer telefonu', messenger_id: 'identyfikator komunikatora', profile_url: 'odnośnik do profilu' };
 const LEVEL_ORDER: ClusterLevel[] = ['entered', 'publisher', 'handle_variant', 'name_unique', 'handle_similar', 'name_ambiguous', 'third_party'];
 const FINGERPRINT_PL: Record<string, string> = { email_md5: 'skrót adresu e-mail w adresie awatara', email_sha256: 'skrót adresu e-mail w adresie awatara', ssh_key: 'klucz publiczny SSH', pgp_key: 'klucz publiczny PGP' };
@@ -164,8 +170,9 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
       for (const [key, value] of Object.entries(n.records)) {
         const targets = key === 'email'
           ? [listedEmail.get(value.toLowerCase())]
-          : ['com.github', 'com.twitter', 'org.telegram'].includes(key)
-            ? [...accounts.keys()].filter((k) => accounts.get(k)!.handle.toLowerCase() === value.replace(/^@/, '').toLowerCase())
+          : RECORD_SERVICES[key]
+            // A record names a handle on one particular service. An account with the same handle elsewhere may be anyone.
+            ? [...accounts.keys()].filter((k) => RECORD_SERVICES[key].includes(accounts.get(k)!.origin) && accounts.get(k)!.handle.toLowerCase() === value.replace(/^@/, '').toLowerCase())
             : [];
         for (const target of targets) {
           join(publisher, target, 'J7', `adres ${shortAddr(n.address)} podany przez ${label(publisher)} ma nazwę ${n.name}, a jej rekord „${key}: ${value}” wskazuje konto ${target ? label(target) : ''}`);
@@ -325,6 +332,23 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
         note = `Konto dopasowane wyłącznie po imieniu i nazwisku, a to samo imię i nazwisko mają ${carriers} niepowiązane ze sobą grupy kont. Bez drugiego śladu nie wiadomo, czy to ta sama osoba — wynik ograniczony do ${ruleset.identityCaps.name_ambiguous}%.`;
       }
     }
+    // A name-only match is worth what the name's rarity makes it worth: thousands of people are called Jan Kowalski.
+    let cap = level === 'third_party' ? 0 : ruleset.identityCaps[level];
+    if (level === 'name_unique' || level === 'name_ambiguous') {
+      const f = [...(nameMatches.get(root) ?? [])].map((n) => facts.nameFrequency?.[n]).find((x) => x);
+      if (f) {
+        const rule = ruleset.nameFrequency;
+        const people = f.expected < 1 ? 'mniej niż jedna osoba' : f.expected < 10 ? `około ${f.expected.toLocaleString('pl-PL', { maximumFractionDigits: 1 })} osoby` : `około ${Math.round(f.expected).toLocaleString('pl-PL')} osób`;
+        const basis = `Według statystyk rejestru PESEL (stan na ${f.edition}) imię ${f.first} nosi ${f.firstCount.toLocaleString('pl-PL')} osób, a nazwisko ${f.last} — ${f.lastCount.toLocaleString('pl-PL')}; przy założeniu, że imiona i nazwiska łączą się niezależnie, takie imię i nazwisko nosi w Polsce ${people}.`;
+        if (f.expected >= rule.veryCommonFrom || f.expected >= rule.commonFrom) {
+          cap = Math.min(cap, f.expected >= rule.veryCommonFrom ? rule.veryCommonCap : rule.commonCap);
+          note = `Konto dopasowane wyłącznie po imieniu i nazwisku. ${basis} Przy tak częstym imieniu i nazwisku sama zbieżność prawie nic nie mówi o tym, czyje to konto — wynik ograniczony do ${cap}%.`;
+        } else if (f.expected < rule.rareBelow && level === 'name_unique') {
+          cap = Math.max(cap, rule.rareCap);
+          note = `Konto dopasowane wyłącznie po imieniu i nazwisku. ${basis} Przypadkowa zbieżność nazwisk jest więc mało prawdopodobna. Nazwę konta każdy wpisuje sam, dlatego konto mogło zostać założone na cudze nazwisko — wynik ograniczony do ${cap}%.`;
+        } else note = `${note} ${basis}`;
+      }
+    }
     const identifiers = new Map<string, Identifier>();
     for (const d of selfDocs) {
       if (!keys.includes(accountKeyOf(d)!)) continue;
@@ -334,7 +358,7 @@ export function resolveIdentities(facts: RunFacts, ruleset: Ruleset, ctx: Identi
       root,
       id: '',
       level,
-      identityCap: level === 'third_party' ? 0 : ruleset.identityCaps[level],
+      identityCap: cap,
       identityNote: note,
       accounts: keys.map((k) => accounts.get(k)!),
       joins: joins.filter((j) => keys.includes(j.a)).map(({ rule, detail }) => ({ rule, detail })),

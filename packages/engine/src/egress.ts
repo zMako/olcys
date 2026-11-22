@@ -95,7 +95,8 @@ export function createEgress(opts: EgressOptions) {
       const body = (await response.text()).slice(0, opts.maxBytes ?? 5_000_000);
       const { snap, fetchedAt } = await store(connectorId, final, response, body, init?.body);
       const resource: FetchedResource = { snapshotId: snap.id, url: final, status: response.status, contentType: snap.content_type, body, sha256: snap.sha256, fetchedAt };
-      textCache.set(key, resource);
+      // Only an answer is remembered. A refusal or an error may be asked again, and each attempt is kept as evidence.
+      if (response.status < 400) textCache.set(key, resource);
       return resource;
     },
     /** Fetches a binary resource such as a photo. */

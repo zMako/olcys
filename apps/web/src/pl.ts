@@ -26,7 +26,7 @@ export const ACCOUNT_KIND: Record<string, string> = {
 };
 export const CATEGORY: Record<string, string> = {
   exchange: 'giełda', exchange_deposit: 'giełda', p2p: 'wymiana P2P', payment_gateway: 'bramka płatnicza', card: 'karta płatnicza', otc: 'kantor',
-  dex: 'giełda zdecentralizowana', token: 'kontrakt tokena', contract: 'smart kontrakt', mixer: 'mikser', charity: 'zbiórka', bridge: 'most', other: 'usługa',
+  dex: 'giełda zdecentralizowana', token: 'kontrakt tokena', contract: 'smart kontrakt', mixer: 'mikser', charity: 'zbiórka', bridge: 'most', other: 'usługa', sanctioned: 'lista sankcyjna', reported: 'zgłoszony jako oszustwo',
 };
 export const CERTAINTY: Record<string, string> = { probable: 'zbycie prawdopodobne', possible: 'zbycie możliwe' };
 export const LEVEL: Record<string, string> = {
@@ -50,7 +50,8 @@ export const moreAddresses = (total: number) => {
 };
 export const shortAddress = (a: string) => (a.length > 18 ? `${a.slice(0, 9)}…${a.slice(-6)}` : a);
 export const pln = (n: number) => `${Math.round(n).toLocaleString('pl-PL')} zł`;
-export const amount = (n: number) => n.toLocaleString('pl-PL', { maximumFractionDigits: 8 });
+/** An amount with as many decimals as its size deserves: 5 169,43 but 0,01206. */
+export const amount = (n: number) => n.toLocaleString('pl-PL', { maximumFractionDigits: Math.abs(n) >= 1000 ? 2 : Math.abs(n) >= 1 ? 4 : 8 });
 export const amounts = (list: { asset: string; amount: number }[]) => list.map((x) => `${amount(x.amount)} ${x.asset}`).join(' + ');
 export const day = (iso?: string) => (iso ? iso.slice(0, 10) : '—');
 export const minute = (iso?: string) => (iso ? iso.slice(0, 16).replace('T', ', ') : '—');
@@ -79,6 +80,8 @@ export function describe(e: StoredRunEvent): string {
       return `Przeczytano wpisy osoby: ${e.posts}, z czego ${e.generated} napisały aplikacje. Wypowiedzi o własnych kryptowalutach: ${e.statements}.`;
     case 'statement':
       return `Osoba pisze o własnych kryptowalutach: „${e.text.slice(0, 110)}${e.text.length > 110 ? '…' : ''}”`;
+    case 'attestation':
+      return `${e.issuer} publicznie poświadcza, że właściciel adresu ${shortAddress(e.address)} jest zweryfikowanym klientem giełdy${e.value ? ` (kraj: ${e.value})` : ''}.`;
     case 'deployment':
       return `Kontrakt ${shortAddress(e.contract)} utworzono z adresu ${shortAddress(e.creator)}. Tego adresu osoba nigdzie nie podała.`;
     case 'address':

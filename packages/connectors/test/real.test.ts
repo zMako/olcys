@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractAddresses, makeIdentifier, type ConnectorContext, type FetchInit, type FetchedResource, type SourceItem } from '@olcys/core';
-import { createEnsNameService, createEsploraConnector, createEvmRpcConnector, createFarcasterConnector, createGithubConnector, createKeybaseConnector, createWaybackConnector, decodeString, namehash, selector, transfersFromTx } from '../src';
+import { baseReverseNode, combineNameServices, createBasenameService, encodeTextCall, coinbaseAttestations, createBlockscout, labelFromTags, tokenAsset, createEnsNameService, createEsploraConnector, createEvmRpcConnector, createFarcasterConnector, createGithubConnector, createKeybaseConnector, createWaybackConnector, decodeString, namehash, selector, transfersFromTx } from '../src';
 import { signFarcasterClaim, toEip55 } from '@olcys/core';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
@@ -180,6 +180,125 @@ describe('accounts that sign for their addresses', () => {
     expect(items[0].discovered.map((d) => `${d.kind}:${d.value}`)).toEqual(['profile_url:https://github.com/devka', 'full_name:Ewa Rzecka']); // a broken proof is not a lead
     expect(items[0].attestations).toEqual([expect.objectContaining({ chain: 'bitcoin', address: BTC, valid: true, attestedBy: 'Keybase' })]);
     expect(extractAddresses(items[0].segments.find((x) => x.kind === 'contact')!.text).map((m) => m.address)).toEqual([BTC]);
+  });
+});
+
+describe('Ethereum transfer history and labels from an indexer', () => {
+  const me = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+  const deposit = '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359';
+  const hot = '0x28C6c06298d514Db089934071355E5743bf21d60';
+  const pool = '0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB';
+  const USDC = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+  const party = (hash: string, tags?: unknown[]) => ({ hash: hash.toLowerCase(), metadata: tags ? { tags } : null });
+  const exchangeTags = [{ name: 'Binance: Hot Wallet', tagType: 'name', slug: 'binance-hot-wallet' }, { name: 'Exchange', tagType: 'generic', slug: 'exchange' }, { name: 'Binance', tagType: 'protocol', slug: 'binance' }];
+
+  it('reads labels: an exchange by its tags, a router as a DEX, and nothing from tags that say nothing', () => {
+    expect(labelFromTags(exchangeTags, 'x')).toEqual({ name: 'Binance: Hot Wallet', category: 'exchange', source: 'x' });
+    expect(labelFromTags([{ name: 'Coinbase10', tagType: 'name', slug: 'coinbase10' }, { name: 'Coinbase Exchange', tagType: 'protocol', slug: 'coinbase-exchange' }], 'x')).toMatchObject({ category: 'exchange' });
+    expect(labelFromTags([{ name: 'Uniswap V2: Router 2', tagType: 'name', slug: 'uniswap-v2-router-2' }, { name: 'DEX', tagType: 'generic', slug: 'dex' }], 'x')).toMatchObject({ name: 'Uniswap V2: Router 2', category: 'dex' });
+    expect(labelFromTags([{ name: 'Some NFT fan', tagType: 'name', slug: 'some-nft-fan' }], 'x')).toMatchObject({ category: 'other' });
+    expect(labelFromTags([{ name: 'Credible token', tagType: 'token_reputation', slug: 'credible-token' }], 'x')).toBeUndefined();
+    expect(labelFromTags(undefined, 'x')).toBeUndefined();
+  });
+
+  it('does not take a token\'s word for what it is', () => {
+    expect(tokenAsset(USDC, 'USDC')).toBe('USDC');
+    expect(tokenAsset(USDC.toLowerCase(), 'whatever')).toBe('USDC');
+    expect(tokenAsset('0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', 'USDC')).toBe('USDC (inny kontrakt)');
+    expect(tokenAsset('0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', 'degen')).toBe('DEGEN');
+    expect(tokenAsset(undefined, '<script>')).toBe('SCRIPT');
+  });
+
+  it('lists ether, internal and token transfers with paging, and learns labels on the way', async () => {
+    const base = `https://indexer.example/api/v2/addresses/${me}`;
+    const { ctx, asked } = fakeNet({
+      [`${base}/transactions?block_number=10&index=2`]: { items: [{ hash: '0xa3', status: 'ok', timestamp: '2025-03-03T10:00:00.000000Z', value: '250000000000000000', from: party(me), to: party(deposit) }], next_page_params: null },
+      [`${base}/transactions`]: { items: [
+        { hash: '0xa1', status: 'ok', timestamp: '2025-03-01T10:00:00.000000Z', value: '1500000000000000000', from: party(me), to: party(deposit) },
+        { hash: '0xa2', status: 'error', timestamp: '2025-03-02T10:00:00.000000Z', value: '9000000000000000000', from: party(me), to: party(hot) }, // a failed transaction moved nothing
+        { hash: '0xa4', status: 'ok', timestamp: '2025-03-02T11:00:00.000000Z', value: '0', from: party(me), to: party(USDC) }, // a contract call without ether
+      ], next_page_params: { block_number: 10, index: 2 } },
+      [`${base}/internal-transactions`]: { items: [{ transaction_hash: '0xb1', success: true, timestamp: '2025-02-01T08:00:00.000000Z', value: '2000000000000000000', from: party(pool), to: party(me) }], next_page_params: null },
+      [`${base}/token-transfers`]: { items: [
+        { transaction_hash: '0xc1', timestamp: '2025-03-05T09:00:00.000000Z', from: party(me), to: party(hot, exchangeTags), token: { symbol: 'USDC', address_hash: USDC, decimals: '6' }, total: { value: '2500000000', decimals: '6' } },
+        { transaction_hash: '0xc2', timestamp: '2025-03-06T09:00:00.000000Z', from: party(pool), to: party(me), token: { symbol: 'USDC', address_hash: pool, decimals: '18' }, total: { value: '5000000000000000000000', decimals: '18' } },
+      ], next_page_params: null },
+      'https://labels.example/api/v1/metadata': { addresses: { [pool.toLowerCase()]: { tags: [{ name: 'DEX', tagType: 'generic', slug: 'dex' }, { name: 'Some Pool', tagType: 'name', slug: 'some-pool' }] } } },
+    });
+    const scout = createBlockscout({ indexer: 'https://indexer.example/', labels: 'https://labels.example' });
+    const transfers = await scout.transfers(me, ctx);
+    expect(transfers.map((t) => [t.txHash, t.asset, t.amount, t.to === me ? 'in' : 'out'])).toEqual([
+      ['0xb1', 'ETH', 2, 'in'], ['0xa1', 'ETH', 1.5, 'out'], ['0xa3', 'ETH', 0.25, 'out'], ['0xc1', 'USDC', 2500, 'out'], ['0xc2', 'USDC (inny kontrakt)', 5000, 'in'],
+    ]);
+    expect(transfers.every((t) => t.chain === 'ethereum' && t.snapshotId)).toBe(true);
+    // the exchange was labelled by what the indexer embedded; the pool by one batched question to the label service
+    expect(await scout.labelsOf(hot, ctx)).toEqual([{ name: 'Binance: Hot Wallet', category: 'exchange', source: 'publiczne etykiety Blockscout' }]);
+    expect(await scout.labelsOf(pool, ctx)).toMatchObject([{ name: 'Some Pool', category: 'dex' }]);
+    expect(asked.filter((a) => a.url.startsWith('https://labels.example')).length).toBe(1);
+    expect(asked.find((a) => a.url.startsWith('https://labels.example'))!.url).toContain('chainId=1');
+  });
+
+  it('the Ethereum connector lists transfers only when an indexer is configured', async () => {
+    const { ctx } = fakeNet({});
+    expect(await createEvmRpcConnector('https://node.example/rpc').getTransfers('ethereum', me, ctx)).toEqual([]);
+    expect(createEvmRpcConnector('https://node.example/rpc', { indexer: 'https://indexer.example', labels: 'https://labels.example' }).descriptor.hosts).toEqual(['node.example', 'indexer.example', 'labels.example']);
+  });
+});
+
+describe('public attestations about an address', () => {
+  it('reads Coinbase\'s verified-customer and verified-country attestations and ignores the rest', async () => {
+    const decoded = (name: string, value: unknown) => JSON.stringify([{ name, type: 'string', value: { name, type: 'string', value } }]);
+    const { ctx, asked } = fakeNet({ 'https://eas.example/graphql': { data: { attestations: [
+      { id: '0xaaa', time: 1740909600, decodedDataJson: decoded('verifiedAccount', true), schema: { schemaNames: [{ name: 'Verified Account' }] } },
+      { id: '0xbbb', time: 1740909660, decodedDataJson: decoded('verifiedCountry', 'PL'), schema: { schemaNames: [{ name: 'Verified Country' }] } },
+      { id: '0xccc', time: 1740909700, decodedDataJson: decoded('verifiedCoinbaseOne', true), schema: { schemaNames: [{ name: 'Verified Coinbase One' }] } },
+    ] } } });
+    const got = await coinbaseAttestations('https://eas.example/graphql', ETH, ctx);
+    expect(got).toEqual([
+      { chain: 'ethereum', address: ETH, issuer: 'Coinbase', claim: 'verified_account', value: undefined, uid: '0xaaa', at: '2025-03-02T10:00:00.000Z', sourceUrl: 'https://eas.example/attestation/view/0xaaa' },
+      { chain: 'ethereum', address: ETH, issuer: 'Coinbase', claim: 'verified_country', value: 'PL', uid: '0xbbb', at: '2025-03-02T10:01:00.000Z', sourceUrl: 'https://eas.example/attestation/view/0xbbb' },
+    ]);
+    expect(asked[0].init?.body).toContain(ETH);
+    expect(asked[0].init?.body).toContain('0x357458739F90461b99789350868CD7CF330Dd7EE'); // only what Coinbase itself issued
+    expect(createEvmRpcConnector('https://node.example/rpc').getAttestations).toBeUndefined();
+    expect(createEvmRpcConnector('https://node.example/rpc', { attestations: 'https://eas.example/graphql' }).descriptor.hosts).toEqual(['node.example', 'eas.example']);
+  });
+});
+
+describe('Base names', () => {
+  const rpcUrl = 'https://base.example/rpc';
+  const wallet = '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed';
+  const abiString = (v: string) => `0x${(32).toString(16).padStart(64, '0')}${Buffer.byteLength(v).toString(16).padStart(64, '0')}${Buffer.from(v).toString('hex').padEnd(Math.ceil(Buffer.byteLength(v) / 32) * 64 || 64, '0')}`;
+  const node = namehash('ania.base.eth');
+  // a stand-in node: answers each call of a batch by what was asked
+  const net = (name: string, owner: string) => fakeNet({ [rpcUrl]: (init?: FetchInit) => (JSON.parse(init!.body!) as { id: number; params: [{ data: string }] }[]).map((c) => {
+    const data = c.params[0].data.slice(2);
+    let result = abiString('');
+    if (data === selector('name(bytes32)') + baseReverseNode(wallet)) result = abiString(name);
+    else if (data === selector('addr(bytes32)') + node) result = `0x${'0'.repeat(24)}${owner.slice(2).toLowerCase()}`;
+    else if (data === encodeTextCall(node, 'xyz.farcaster')) result = abiString('ania');
+    else if (data === encodeTextCall(node, 'com.twitter')) result = abiString('ania_x');
+    return { jsonrpc: '2.0', id: c.id, result };
+  }) });
+
+  it('reads the name a wallet chose and the accounts its owner attached to it', async () => {
+    const { ctx } = net('ania.base.eth', wallet);
+    const svc = createBasenameService(rpcUrl);
+    expect(await svc.reverse('ethereum', wallet, ctx)).toMatchObject({ name: 'ania.base.eth', address: wallet, records: { 'xyz.farcaster': 'ania', 'com.twitter': 'ania_x' } });
+    expect(await svc.resolve('ania.base.eth', ctx)).toMatchObject({ address: wallet });
+    expect(await svc.resolve('ania.eth', ctx)).toBeUndefined(); // not a Base name: left to the other service
+  });
+
+  it('rejects a name that does not point back at the wallet', async () => {
+    const { ctx } = net('ania.base.eth', '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359');
+    expect(await createBasenameService(rpcUrl).reverse('ethereum', wallet, ctx)).toBeUndefined();
+  });
+
+  it('asks several name services in turn', async () => {
+    const none = { id: 'a', descriptor: { name: 'A', hosts: ['a.example'], synthetic: false }, resolve: async () => undefined, reverse: async () => undefined };
+    const both = combineNameServices(none, createBasenameService(rpcUrl));
+    expect(both.descriptor.hosts).toEqual(['a.example', 'base.example']);
+    expect(await both.reverse('ethereum', wallet, net('ania.base.eth', wallet).ctx)).toMatchObject({ name: 'ania.base.eth' });
   });
 });
 

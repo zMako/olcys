@@ -1,4 +1,4 @@
-import { GENESIS_HASH, chainHash, identifierKey, sha256Hex, type AccountInfo, type AddressMention, type Deployment, type Fingerprint, type Identifier, type Segment, type SourceItem, type Transfer } from '@olcys/core';
+import { GENESIS_HASH, chainHash, identifierKey, sha256Hex, type AccountInfo, type AddressAttestation, type AddressMention, type Deployment, type Fingerprint, type Identifier, type Segment, type SourceItem, type Transfer } from '@olcys/core';
 import type { SqlExecutor } from './executor';
 
 export interface CaseRow {
@@ -6,6 +6,18 @@ export interface CaseRow {
   title: string;
   created_at: string;
   sources: string;
+}
+
+export interface AuditEntry {
+  id: number;
+  at: string;
+  /** The analyst, or "harmonogram" for scheduled runs. */
+  actor: string;
+  action: string;
+  caseId?: string;
+  runId?: string;
+  detail: Record<string, unknown>;
+  hash: string;
 }
 
 export interface ScheduleRow {
@@ -70,10 +82,28 @@ export interface MentionView {
   snapshot_sha256: string;
 }
 
-const json = (v: unknown) => JSON.stringify(v ?? null);
+/**
+ * Real-world text contains things a database will not store as JSON: a null character, or half of an emoji left by
+ * cutting a string at a fixed length. They are replaced, so one odd post cannot fail a whole analysis.
+ */
+export const wellFormed = (s: string): string =>
+  s.replace(/\u0000/g, '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+const json = (v: unknown) => JSON.stringify(v ?? null, (_k, x) => (typeof x === 'string' ? wellFormed(x) : x));
+/** JSON with object keys in a fixed order, for hashing: the database stores JSON objects in its own key order. */
+const canonical = (v: unknown): string =>
+  JSON.stringify(v ?? null, (_k, x) => (typeof x === 'string' ? wellFormed(x) : x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) : x));
 
 export class Store {
   constructor(readonly db: SqlExecutor) {}
+
+  // Entries of a hash chain must be written one at a time: each needs the hash of the one before it.
+  private chainTail: Promise<unknown> = Promise.resolve();
+  private inOrder<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.chainTail.then(work, work);
+    this.chainTail = result.catch(() => undefined);
+    return result;
+  }
+
 
   async createCase(title: string, identifiers: Identifier[]): Promise<CaseRow> {
     const { rows } = await this.db.query<CaseRow>('INSERT INTO cases (title) VALUES ($1) RETURNING *', [title]);
@@ -217,6 +247,10 @@ export class Store {
 
   /** Stores a response body and appends it to the run's hash chain. */
   async saveSnapshot(s: { runId: string; connectorId: string; url: string; status: number; contentType: string; body: string | Uint8Array; fetchedAt: string; requestBody?: string }): Promise<SnapshotRow> {
+    return this.inOrder(() => this.appendSnapshot(s));
+  }
+
+  private async appendSnapshot(s: { runId: string; connectorId: string; url: string; status: number; contentType: string; body: string | Uint8Array; fetchedAt: string; requestBody?: string }): Promise<SnapshotRow> {
     const bytes = typeof s.body === 'string' ? new TextEncoder().encode(s.body) : s.body;
     const sha = sha256Hex(bytes);
     await this.db.query('INSERT INTO blobs (sha256, size, body) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', [sha, bytes.length, bytes]);
@@ -282,7 +316,7 @@ export class Store {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18::jsonb)
        ON CONFLICT (run_id, connector_id, resource_id) DO NOTHING RETURNING id`,
       [
-        runId, item.snapshotId, connectorId, origin, item.resourceId, item.url, item.docType, item.title ?? null,
+        runId, item.snapshotId, connectorId, origin, item.resourceId, item.url, item.docType, item.title ? wellFormed(item.title) : null,
         item.author?.handle ?? null, item.author?.displayName ?? null, item.author?.profileUrl ?? null, item.publishedAt ?? null,
         json(item.container), item.relation, json(matched), json(item.segments), json(item.discovered), json(item.fingerprints ?? []),
       ],
@@ -307,7 +341,7 @@ export class Store {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17)`,
       [
         runId, documentId, m.chain, m.address, m.addressType, m.checksum, m.raw, m.method, json(m.obfuscation),
-        segmentIndex, segment.kind, segment.quotedAuthor ?? null, m.start, m.end, m.context, source?.url ?? null, source?.snapshotId ?? null,
+        segmentIndex, segment.kind, segment.quotedAuthor ?? null, m.start, m.end, wellFormed(m.context), source?.url ?? null, source?.snapshotId ?? null,
       ],
     );
   }
@@ -370,11 +404,83 @@ export class Store {
   async saveTransfers(runId: string, subject: string, transfers: Transfer[]): Promise<void> {
     for (const t of transfers) {
       await this.db.query(
-        `INSERT INTO chain_transfers (run_id, subject_address, chain, tx_hash, at, from_address, to_address, asset, amount, snapshot_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [runId, subject, t.chain, t.txHash, t.at, t.from, t.to, t.asset, t.amount, t.snapshotId ?? null],
+        `INSERT INTO chain_transfers (run_id, subject_address, chain, tx_hash, at, from_address, to_address, asset, amount, snapshot_id, network)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [runId, subject, t.chain, t.txHash, t.at, t.from, t.to, t.asset, t.amount, t.snapshotId ?? null, t.network ?? null],
       );
     }
+  }
+
+  // ------------------------------------------------------------------ what could not be read
+
+  async saveGap(runId: string, source: string, message: string): Promise<void> {
+    await this.db.query('INSERT INTO run_gaps (run_id, source, message, at) VALUES ($1, $2, $3, $4)', [runId, source, wellFormed(message).slice(0, 500), new Date().toISOString()]);
+  }
+
+  /** Sources that failed during the run, each distinct failure once, with how many times it happened. */
+  async gaps(runId: string): Promise<{ source: string; message: string; times: number }[]> {
+    const { rows } = await this.db.query<Record<string, any>>('SELECT source, message, count(*) AS times, min(id) AS first FROM run_gaps WHERE run_id = $1 GROUP BY source, message ORDER BY first', [runId]);
+    return rows.map((r) => ({ source: r.source, message: r.message, times: Number(r.times) }));
+  }
+
+  // ------------------------------------------------------------------ language-model output
+
+  /** Keeps a piece of model output (and what the checks made of it). Asking again replaces the earlier answer. */
+  async saveModelOutput(runId: string, kind: string, key: string, model: string, payload: unknown): Promise<void> {
+    await this.db.query(
+      `INSERT INTO model_outputs (run_id, kind, key, model, payload, created_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+       ON CONFLICT (run_id, kind, key) DO UPDATE SET model = EXCLUDED.model, payload = EXCLUDED.payload, created_at = EXCLUDED.created_at`,
+      [runId, kind, key, model, json(payload), new Date().toISOString()],
+    );
+  }
+
+  /** Drops earlier model output of one kind, before the model is asked afresh. */
+  async clearModelOutputs(runId: string, kind: string): Promise<void> {
+    await this.db.query('DELETE FROM model_outputs WHERE run_id = $1 AND kind = $2', [runId, kind]);
+  }
+
+  async modelOutputs<T = unknown>(runId: string, kind: string): Promise<{ key: string; model: string; payload: T; createdAt: string }[]> {
+    const { rows } = await this.db.query<Record<string, any>>('SELECT key, model, payload, created_at FROM model_outputs WHERE run_id = $1 AND kind = $2 ORDER BY id', [runId, kind]);
+    return rows.map((r) => ({ key: r.key, model: r.model, payload: r.payload as T, createdAt: r.created_at }));
+  }
+
+  // ------------------------------------------------------------------ audit log
+
+  /** Records an action. Each entry's hash covers the previous entry, so the log cannot be edited unnoticed. */
+  async audit(e: { actor: string; action: string; caseId?: string; runId?: string; detail?: Record<string, unknown> }): Promise<void> {
+    return this.inOrder(() => this.appendAudit(e));
+  }
+
+  private async appendAudit(e: { actor: string; action: string; caseId?: string; runId?: string; detail?: Record<string, unknown> }): Promise<void> {
+    const prev = (await this.db.query<{ hash: string }>('SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1')).rows[0]?.hash ?? GENESIS_HASH;
+    const at = new Date().toISOString();
+    const detail = json(e.detail ?? {});
+    const actor = wellFormed(e.actor).slice(0, 80);
+    const hash = sha256Hex([prev, at, actor, e.action, e.caseId ?? '', e.runId ?? '', canonical(e.detail ?? {})].join('|'));
+    await this.db.query('INSERT INTO audit_log (at, actor, action, case_id, run_id, detail, prev_hash, hash) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)', [
+      at, actor, e.action, e.caseId ?? null, e.runId ?? null, detail, prev, hash,
+    ]);
+  }
+
+  /** The log of one case (or of everything), newest first. */
+  async auditTrail(opts: { caseId?: string; limit?: number } = {}): Promise<AuditEntry[]> {
+    const { rows } = await this.db.query<Record<string, any>>(
+      `SELECT id, at, actor, action, case_id, run_id, detail, hash FROM audit_log ${opts.caseId ? 'WHERE case_id = $2' : ''} ORDER BY id DESC LIMIT $1`,
+      opts.caseId ? [opts.limit ?? 200, opts.caseId] : [opts.limit ?? 200],
+    );
+    return rows.map((r) => ({ id: Number(r.id), at: r.at, actor: r.actor, action: r.action, caseId: r.case_id ?? undefined, runId: r.run_id ?? undefined, detail: r.detail ?? {}, hash: r.hash }));
+  }
+
+  /** Recomputes the whole chain. Returns the number of entries and the first one that does not match, if any. */
+  async verifyAudit(): Promise<{ entries: number; intact: boolean; brokenAt?: number }> {
+    const { rows } = await this.db.query<Record<string, any>>('SELECT id, at, actor, action, case_id, run_id, detail, prev_hash, hash FROM audit_log ORDER BY id');
+    let prev = GENESIS_HASH;
+    for (const r of rows) {
+      const expected = sha256Hex([prev, r.at, r.actor, r.action, r.case_id ?? '', r.run_id ?? '', canonical(r.detail ?? {})].join('|'));
+      if (r.prev_hash !== prev || r.hash !== expected) return { entries: rows.length, intact: false, brokenAt: Number(r.id) };
+      prev = r.hash;
+    }
+    return { entries: rows.length, intact: true };
   }
 
   // ------------------------------------------------------------------ what the person's posts say
@@ -393,6 +499,27 @@ export class Store {
     }));
   }
 
+  /** What each account says about itself and a few of its posts: the material for comparing two accounts. */
+  async profileCards(runId: string): Promise<{ origin: string; handle: string; displayName?: string; profile: string; posts: string[] }[]> {
+    const { rows } = await this.db.query<Record<string, any>>(
+      `SELECT origin, author_handle, author_display_name, doc_type, relation, segments FROM documents
+        WHERE run_id = $1 AND author_handle IS NOT NULL ORDER BY published_at NULLS LAST, id`,
+      [runId],
+    );
+    const cards = new Map<string, { origin: string; handle: string; displayName?: string; profile: string; posts: string[] }>();
+    for (const r of rows) {
+      const key = `${r.origin}|${String(r.author_handle).toLowerCase()}`;
+      const card = cards.get(key) ?? { origin: r.origin as string, handle: r.author_handle as string, profile: '', posts: [] };
+      cards.set(key, card);
+      card.displayName ??= (r.author_display_name ?? undefined) as string | undefined;
+      const text = ((r.segments ?? []) as { kind: string; text: string }[]).filter((x) => x.kind !== 'quote').map((x) => x.text).join(' ').replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      if (r.doc_type === 'profile') card.profile = `${card.profile} ${text}`.trim().slice(0, 700);
+      else if (r.relation !== 'mention' && card.posts.length < 6) card.posts.push(text.slice(0, 240));
+    }
+    return [...cards.values()];
+  }
+
   async saveReading(
     runId: string,
     r: { posts: number; generated: number; read: number; model?: unknown; statements: { documentId: string; relevance: number; text: string; at?: string; url?: string }[] },
@@ -404,7 +531,7 @@ export class Store {
     for (const x of r.statements) {
       await this.db.query(
         'INSERT INTO statements (run_id, document_id, relevance, text, at, url) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (run_id, document_id) DO NOTHING',
-        [runId, x.documentId, x.relevance, x.text, x.at ?? null, x.url ?? null],
+        [runId, x.documentId, x.relevance, wellFormed(x.text), x.at ?? null, x.url ?? null],
       );
     }
   }
@@ -432,6 +559,20 @@ export class Store {
     return r && { model: r.model, text: r.text, createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at) };
   }
 
+  async saveAttestations(runId: string, list: AddressAttestation[]): Promise<void> {
+    for (const a of list) {
+      await this.db.query(
+        `INSERT INTO address_attestations (run_id, chain, address, issuer, claim, value, uid, at, source_url, note) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (run_id, uid) DO NOTHING`,
+        [runId, a.chain, a.address, a.issuer, a.claim, a.value ?? null, a.uid, a.at ?? null, a.sourceUrl ?? null, a.note ?? null],
+      );
+    }
+  }
+
+  async attestations(runId: string): Promise<AddressAttestation[]> {
+    const { rows } = await this.db.query<Record<string, any>>('SELECT chain, address, issuer, claim, value, uid, at, source_url, note FROM address_attestations WHERE run_id = $1 ORDER BY id', [runId]);
+    return rows.map((r) => ({ chain: r.chain, address: r.address, issuer: r.issuer, claim: r.claim, value: r.value ?? undefined, uid: r.uid, at: r.at ?? undefined, sourceUrl: r.source_url ?? undefined, note: r.note ?? undefined }));
+  }
+
   async saveDeployment(runId: string, d: Deployment): Promise<void> {
     await this.db.query(
       `INSERT INTO deployments (run_id, chain, contract, creator, tx_hash, at, source_url, snapshot_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -449,10 +590,10 @@ export class Store {
   /** Every stored value movement of a run, oldest first. */
   async transfers(runId: string): Promise<(Transfer & { subject: string })[]> {
     const { rows } = await this.db.query<Record<string, any>>(
-      'SELECT subject_address, chain, tx_hash, at, from_address, to_address, asset, amount FROM chain_transfers WHERE run_id = $1 ORDER BY at, id',
+      'SELECT subject_address, chain, tx_hash, at, from_address, to_address, asset, amount, network FROM chain_transfers WHERE run_id = $1 ORDER BY at, id',
       [runId],
     );
-    return rows.map((r) => ({ subject: r.subject_address, chain: r.chain, txHash: r.tx_hash, at: r.at, from: r.from_address, to: r.to_address, asset: r.asset, amount: Number(r.amount) }));
+    return rows.map((r) => ({ subject: r.subject_address, chain: r.chain, txHash: r.tx_hash, at: r.at, from: r.from_address, to: r.to_address, asset: r.asset, amount: Number(r.amount), network: r.network ?? undefined }));
   }
 
   async saveActivity(runId: string, chain: string, address: string, a: { activity: unknown; indicators: unknown; wallet: unknown; offRamps: unknown }): Promise<void> {
@@ -533,6 +674,8 @@ export class Store {
       seeds: await this.caseIdentifiers(run.case_id), documents, hits, mentions, proofs, accounts: await this.chainAccounts(runId), sources,
       wallets, amountMatches: await this.amountMatches<any>(runId), names: await this.nameRecords<any>(runId),
       deployments: await this.deployments(runId),
+      attestations: await this.attestations(runId),
+      opinions: (await this.modelOutputs<{ origin: string; handle: string; verdict: 'same' | 'different' | 'unclear'; reasons: string[] }>(runId, 'judgement')).map((o) => ({ ...o.payload, model: o.model })),
       transfers: (await this.transfers(runId)).map((t) => ({ subject: t.subject, chain: t.chain as string, txHash: t.txHash, at: t.at, from: t.from, to: t.to })),
     };
   }

@@ -53,10 +53,37 @@ export interface Transfer {
   to: string;
   asset: string;
   amount: number;
+  /** A network built on top of the chain where the transfer happened, e.g. "Base". Empty for the main network. */
+  network?: string;
   /** Bitcoin: the other addresses that funded the same transaction as `from`. */
   coInputs?: string[];
   snapshotId?: string;
 }
+
+/**
+ * Something an institution attests about an address in public — for instance an exchange stating on chain that
+ * the address belongs to one of its verified customers. It does not say who the owner is; it says who knows.
+ */
+export interface AddressAttestation {
+  chain: Chain;
+  address: string;
+  /** Who attests, e.g. "Coinbase". */
+  issuer: string;
+  /** What is attested: "verified_account" or "verified_country". */
+  claim: string;
+  /** For a country attestation, the ISO code. */
+  value?: string;
+  /** Attestation id, by which anyone can look it up. */
+  uid: string;
+  at?: string;
+  sourceUrl?: string;
+  /** What the attestation says, as a clause in plain words, written by the source that knows its meaning. */
+  note?: string;
+}
+
+/** Claims issued by a party that checked the owner's identity documents: such an issuer can name the owner on request. */
+const IDENTITY_CLAIMS = new Set(['verified_account', 'verified_country', 'verified_coinbase_one', 'verified_business_account', 'verified_business_country', 'identity_check']);
+export const knowsIdentity = (a: Pick<AddressAttestation, 'claim'>): boolean => IDENTITY_CLAIMS.has(a.claim);
 
 /** A contract and the address that created it. */
 export interface Deployment {
@@ -76,10 +103,14 @@ export interface ChainConnector {
   supports(chain: Chain): boolean;
   getAccount(chain: Chain, address: string, ctx: ConnectorContext): Promise<AccountInfo>;
   getTransfers(chain: Chain, address: string, ctx: ConnectorContext): Promise<Transfer[]>;
+  /** Which of these addresses carry a public label. Cheap (many addresses per request): it decides which counterparties deserve a full lookup. */
+  getLabelled?(chain: Chain, addresses: string[], ctx: ConnectorContext): Promise<string[]>;
   /** Which address created a contract. Optional: needs an indexer, a plain node cannot answer it. */
   getCreator?(chain: Chain, contract: string, ctx: ConnectorContext): Promise<Deployment | undefined>;
   /** Contracts an address created. */
   getDeployed?(chain: Chain, address: string, ctx: ConnectorContext): Promise<Deployment[]>;
+  /** Public attestations by institutions about the address (e.g. an exchange's "verified customer"). */
+  getAttestations?(chain: Chain, address: string, ctx: ConnectorContext): Promise<AddressAttestation[]>;
 }
 
 /** Official average exchange rate, as published by the central bank. */

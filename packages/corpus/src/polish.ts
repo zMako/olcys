@@ -42,10 +42,21 @@ export const isPolishText = (text: string, minWords = 4): boolean => {
   return words >= minWords && share >= 0.2 && share * words >= 2;
 };
 
-export function polishSignals(a: { location?: string; bio?: string; name?: string; url?: string; texts?: string[] }): PolishSignals {
+import { inPoland, nearestCity } from './poland';
+
+export function polishSignals(a: { location?: string; geo?: { lat: number; lon: number }; bio?: string; name?: string; url?: string; texts?: string[]; attested?: boolean }): PolishSignals {
   const reasons: string[] = [];
   let score = 0;
-  if (a.location && (PLACE.test(a.location) || FLAG.test(a.location))) {
+  // The strongest sign there is: an exchange that verified the person's identity says so, in public, about their wallet.
+  if (a.attested) {
+    score += 0.9;
+    reasons.push('portfel z publicznym poświadczeniem Coinbase: klient zweryfikowany w Polsce');
+  }
+  if (a.geo && inPoland(a.geo.lat, a.geo.lon)) {
+    const near = nearestCity(a.geo.lat, a.geo.lon);
+    score += 0.6;
+    reasons.push(`podana lokalizacja w Polsce (${near.km <= 25 ? near.city : `${near.km} km od: ${near.city}`})`);
+  } else if (a.location && (PLACE.test(a.location) || FLAG.test(a.location))) {
     score += 0.6;
     reasons.push(`podana lokalizacja: ${a.location}`);
   }

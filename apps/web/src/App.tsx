@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { RunDiff, RunSummary, StoredRunEvent } from '@olcys/engine';
 import { GraphView, Legend } from './graph/Graph';
 import { buildGraph, layoutGraph } from './graph/model';
+import { Register } from './Register';
 import { Panel, type CaseActions, type CaseInfo, type LlmState, type Vault } from './Panel';
 import { describe } from './pl';
 
@@ -31,7 +32,7 @@ export function App() {
   const [vault, setVault] = useState<Vault>();
   const [selected, setSelected] = useState<string | undefined>(query.get('select') ?? undefined);
   const [sources, setSources] = useState<'synthetic' | 'live'>(query.get('sources') === 'live' ? 'live' : 'synthetic');
-  const [view, setView] = useState<'graph' | 'report'>(query.get('view') === 'report' ? 'report' : 'graph');
+  const [view, setView] = useState<'graph' | 'report' | 'register'>(query.get('view') === 'report' ? 'report' : query.get('view') === 'register' ? 'register' : 'graph');
   const [error, setError] = useState<string>();
   const [diff, setDiff] = useState<RunDiff | null>();
   const [caseInfo, setCaseInfo] = useState<CaseInfo>();
@@ -70,7 +71,12 @@ export function App() {
         setSummary(result);
         setVault((await getJson<{ verification: Vault }>(`/api/runs/${runId}/evidence`)).verification);
         setDiff((await getJson<{ diff: RunDiff | null }>(`/api/runs/${runId}/diff`)).diff);
-        setCaseInfo(await getJson<CaseInfo>(`/api/cases/${result.caseId}`));
+        const info = await getJson<CaseInfo>(`/api/cases/${result.caseId}`);
+        setCaseInfo(info);
+        // The header shows what the open analysis was about, also when it was opened by its address.
+        const seeds = result.identifiers.filter((i) => i.origin === 'seed').map((i) => i.value);
+        if (seeds.length) setInput(seeds.join(', '));
+        if (info.sources === 'live' || info.sources === 'synthetic') setSources(info.sources);
         setStatus(res.status === 'failed' ? 'failed' : 'completed');
       } catch (err) {
         if (!stop) setError(err instanceof Error ? err.message : String(err));
@@ -154,9 +160,12 @@ export function App() {
     },
     describeCase: () => {
       setLlm((x) => x && { ...x, busy: 'describe' });
-      void getJson(`/api/runs/${summary.runId}/narrative`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
-        .then(() => getJson<RunSummary>(`/api/runs/${summary.runId}`))
-        .then(setSummary)
+      // One part after another, so each result appears as soon as the model has written it.
+      const part = (name: string) => () => getJson<RunSummary>(`/api/runs/${summary.runId}/dossier?part=${name}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then(setSummary);
+      void part('describe')()
+        .then(part('leads'))
+        .then(part('accounts'))
+        .then(part('requests'))
         .catch((err) => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => setLlm((x) => x && { ...x, busy: undefined }));
     },
@@ -177,10 +186,9 @@ export function App() {
     if (best) setSelected(best.id);
   }, [atEnd, graph, selected, diff]);
 
-  const analyze = useCallback(
-    async (e: FormEvent) => {
-      e.preventDefault();
-      const identifiers = input.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+  const start = useCallback(
+    async (text: string, from: 'synthetic' | 'live') => {
+      const identifiers = text.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
       if (!identifiers.length) return;
       setError(undefined);
       setSelected(undefined);
@@ -193,14 +201,32 @@ export function App() {
         const res = await getJson<{ runId: string }>('/api/analyze', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ identifiers, sources }),
+          body: JSON.stringify({ identifiers, sources: from }),
         });
         setRunId(res.runId);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [input, sources],
+    [],
+  );
+  const analyze = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      setView((v) => (v === 'register' ? 'graph' : v));
+      void start(input, sources);
+    },
+    [input, sources, start],
+  );
+  /** A row of the register becomes a case: the wallet is analysed against the live internet. */
+  const analyzeWallet = useCallback(
+    (address: string) => {
+      setInput(address);
+      setSources('live');
+      setView('graph');
+      void start(address, 'live');
+    },
+    [start],
   );
 
   const node = graph.nodes.find((n) => n.id === selected);
@@ -232,12 +258,17 @@ export function App() {
           <button className={view === 'report' ? 'on' : ''} onClick={() => setView('report')} aria-pressed={view === 'report'} disabled={!summary}>
             Raport
           </button>
+          <button className={view === 'register' ? 'on' : ''} onClick={() => setView('register')} aria-pressed={view === 'register'}>
+            Rejestr
+          </button>
         </nav>
       </header>
 
       {error && <p className="error">Nie udało się wykonać analizy: {error}. Sprawdź, czy działa serwer API i środowisko źródeł.</p>}
 
-      {view === 'report' && summary ? (
+      {view === 'register' ? (
+        <Register onAnalyze={analyzeWallet} />
+      ) : view === 'report' && summary ? (
         <main className="report-view">
           <div className="report-bar">
             <span>Raport z analizy, gotowy do wydruku.</span>

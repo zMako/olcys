@@ -14,13 +14,35 @@ export class PoliteClient {
   private next = 0;
   requests = 0;
 
-  constructor(private readonly perSecond: number, private readonly attempts = 5) {}
+  /** How often the service asked us to slow down or failed to answer. A caller that adapts its pace watches this. */
+  slowdowns = 0;
+
+  constructor(public perSecond: number, private readonly attempts = 5) {}
 
   private async turn(): Promise<void> {
     const gap = 1000 / this.perSecond;
     const at = Math.max(Date.now(), this.next);
     this.next = at + gap;
     if (at > Date.now()) await sleep(at - Date.now());
+  }
+
+  /** One paced request of any kind (e.g. a JSON-RPC call), returning the status and the raw body. */
+  async raw(url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<{ status: number; body: string }> {
+    let wait = 3000;
+    for (let i = 0; i < this.attempts; i++) {
+      await this.turn();
+      this.requests++;
+      try {
+        const res = await fetch(url, { method: init.method ?? 'GET', body: init.body, headers: { 'user-agent': USER_AGENT, ...init.headers }, signal: AbortSignal.timeout(30_000) });
+        if (res.status === 401 || res.status === 403) throw new BlockedError(`${res.status} for ${url}`);
+        if (res.status !== 429 && res.status < 500) return { status: res.status, body: await res.text() };
+      } catch (err) {
+        if (err instanceof BlockedError) throw err;
+      }
+      await sleep(wait);
+      wait *= 2;
+    }
+    throw new GaveUpError(`gave up on ${url}`);
   }
 
   /** GET returning parsed JSON, or undefined for "not found". */
@@ -33,6 +55,7 @@ export class PoliteClient {
       try {
         res = await fetch(url, { headers: { 'user-agent': USER_AGENT, accept: 'application/json' }, signal: AbortSignal.timeout(30_000) });
       } catch {
+        this.slowdowns++;
         await sleep(wait);
         wait *= 2;
         continue;
@@ -40,6 +63,7 @@ export class PoliteClient {
       if (res.ok) return (await res.json()) as T;
       if (res.status === 404 || res.status === 400) return undefined;
       if (res.status === 401 || res.status === 403) throw new BlockedError(`${res.status} for ${url}`);
+      this.slowdowns++;
       // 429 or a server error: wait as long as asked, then longer each time
       const asked = Number(res.headers.get('retry-after'));
       // An hourly quota does not clear in seconds: when told "too many", wait at least a minute.

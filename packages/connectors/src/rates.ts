@@ -16,8 +16,17 @@ export function createNbpConnector(base = 'https://api.nbp.pl', synthetic = fals
       // The rate that applies is the one from the last working day before the day in question.
       const end = Date.parse(`${date}T00:00:00Z`) - day;
       const url = `${root}/api/exchangerates/rates/a/usd/${iso(end - 9 * day)}/${iso(end)}/?format=json`;
-      const res = await ctx.fetch(url);
-      if (res.status !== 200) return undefined;
+      // The bank's API now and then answers a valid question with an error page (measured: about one request in six).
+      // "No data" from the API itself is a short plain-text answer; an HTML page or a server error is asked again.
+      let res = await ctx.fetch(url);
+      for (let attempt = 2; attempt <= 5 && res.status !== 200 && (res.status >= 500 || res.status === 429 || res.body.trimStart().startsWith('<')); attempt++) {
+        await new Promise((r) => setTimeout(r, 250 * 2 ** (attempt - 1))); // 0.5 s, 1 s, 2 s, 4 s: the refusals come in bursts
+        res = await ctx.fetch(url);
+      }
+      if (res.status !== 200) {
+        if (res.status >= 500 || res.status === 429 || res.body.trimStart().startsWith('<')) ctx.log(`kurs NBP sprzed ${date}: odpowiedź ${res.status} mimo ponawiania`);
+        return undefined;
+      }
       const body = JSON.parse(res.body) as { rates: { no: string; effectiveDate: string; mid: number }[] };
       const last = body.rates[body.rates.length - 1];
       if (!last) return undefined;

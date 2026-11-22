@@ -9,8 +9,12 @@ import { Receipt } from './Receipt';
 /** A case and its analyses, as the API reports them. */
 export interface CaseInfo {
   id: string;
+  /** Which set of sources the case is analysed against. */
+  sources?: string;
   schedule: { everySeconds: number; nextRunAt: string } | null;
   runs: { id: string; status: string; trigger: string; startedAt: string; changes: { changed: boolean; summary: string } | null }[];
+  /** Who did what in this case, newest first. */
+  audit?: { id: number; at: string; actor: string; action: string; runId?: string }[];
 }
 
 export interface CaseActions {
@@ -39,6 +43,73 @@ const second = (at: string) => {
 };
 const changeNote = (r: CaseInfo['runs'][number]) =>
   r.status === 'running' ? 'w toku' : r.status === 'failed' ? 'nieudana' : !r.changes ? 'pierwsza analiza' : r.changes.changed ? r.changes.summary.replace(/^Od poprzedniej analizy: /, '').replace(/\.$/, '') : 'bez zmian';
+
+const AUDIT: Record<string, string> = {
+  'analysis.started': 'uruchomiono analizę', 'analysis.repeated': 'powtórzono analizę', 'analysis.scheduled': 'analiza z harmonogramu', 'schedule.set': 'ustawiono harmonogram',
+  'schedule.cleared': 'wyłączono harmonogram', 'report.viewed': 'otwarto raport', 'report.exported': 'pobrano raport (PDF)', 'posts.read': 'model językowy przeczytał wpisy',
+  'case.described': 'model językowy opracował sprawę', 'register.viewed': 'otwarto rejestr portfeli', 'run.rescored': 'przeliczono wynik według zmienionych reguł',
+};
+
+const LAYER: Record<string, string> = { fact: 'fakt źródłowy', computed: 'wynik obliczony', conclusion: 'wniosek do weryfikacji' };
+
+/** The model's description: each sentence carries the findings it rests on; choosing one shows them. */
+function Dossier({ dossier }: { dossier: NonNullable<RunSummary['dossier']> }) {
+  const [open, setOpen] = useState<number>();
+  const [showRejected, setShowRejected] = useState(false);
+  const byId = new Map(dossier.findings.map((f) => [f.id, f]));
+  return (
+    <>
+      <div className="dossier">
+        {dossier.sentences.map((x, i) => (
+          <span key={i} className={open === i ? 'sentence on' : 'sentence'}>
+            {x.text}{' '}
+            <button className="cite" onClick={() => setOpen(open === i ? undefined : i)} aria-expanded={open === i} title="Pokaż ustalenia, na których opiera się to zdanie">
+              {x.cites.join(', ')}
+            </button>{' '}
+          </span>
+        ))}
+      </div>
+      {open !== undefined && (
+        <ul className="findings">
+          {dossier.sentences[open].cites.map((id) => {
+            const f = byId.get(id);
+            return (
+              f && (
+                <li key={id}>
+                  <span className="mono">{f.id}</span> <span className="quiet">({LAYER[f.layer]})</span> {f.text}{' '}
+                  {f.source && (
+                    <a href={f.source} target="_blank" rel="noreferrer">
+                      źródło
+                    </a>
+                  )}
+                </li>
+              )
+            );
+          })}
+        </ul>
+      )}
+      <p className="quiet">
+        Napisał model {dossier.model.split('/').pop()} na tej maszynie, wyłącznie z {dossier.findings.length} ponumerowanych ustaleń tej analizy. Program sprawdził każde zdanie: wskazane ustalenia istnieją, a liczby i adresy z nich pochodzą.{' '}
+        {dossier.rejected.length ? (
+          <button className="linklike" onClick={() => setShowRejected(!showRejected)}>
+            Odrzucone zdania: {dossier.rejected.length}
+          </button>
+        ) : (
+          'Żadnego zdania nie odrzucono.'
+        )}
+      </p>
+      {showRejected && (
+        <ul className="findings">
+          {dossier.rejected.map((r, i) => (
+            <li key={i}>
+              „{r.text}” <span className="quiet">— {r.reason}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
 
 const EVERY: [number, string][] = [[30, 'co 30 sekund'], [300, 'co 5 minut'], [3600, 'co godzinę'], [86_400, 'co dobę']];
 
@@ -582,6 +653,27 @@ function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseI
         </Section>
       )}
 
+      {graph.finished && !!summary?.attestations?.length && (
+        <Section title="Co o adresach poświadczają instytucje" layer="fact">
+          {[...new Set(summary.attestations.map((x) => `${x.issuer}|${x.address}`))].map((key) => {
+            const [issuer, address] = key.split('|');
+            const theirs = summary.attestations!.filter((x) => x.issuer === issuer && x.address === address);
+            const country = theirs.find((x) => x.claim === 'verified_country')?.value;
+            const said = [...new Set(theirs.map((x) => x.note).filter(Boolean))];
+            return (
+              <p key={key}>
+                <strong>{issuer}</strong> o adresie <span className="mono">{shortAddress(address)}</span>:{' '}
+                {said.length ? said.join('; ') : `właściciel jest zweryfikowanym klientem tej giełdy${country ? ` (kraj weryfikacji: ${country})` : ''}`}.{' '}
+                <button className="linklike" onClick={() => onSelect(addressId('ethereum', address))}>
+                  Pokaż adres
+                </button>
+              </p>
+            );
+          })}
+          <p className="quiet">Poświadczenie nie wskazuje osoby. Giełda lub usługa, która sprawdziła dokumenty właściciela, może go wskazać na wniosek organu; pozostałe poświadczenia są okolicznościami.</p>
+        </Section>
+      )}
+
       {graph.finished && summary && caseInfo && actions && (
         <Section title="Analizy tej sprawy" layer="fact">
           <div className="case-controls">
@@ -612,6 +704,24 @@ function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseI
             ))}
           </ul>
           <p className="quiet">Wynik każdej analizy jest zapisany i można go porównać z dowolną wcześniejszą.</p>
+        </Section>
+      )}
+
+      {graph.finished && !!caseInfo?.audit?.length && (
+        <Section title="Dziennik czynności" layer="fact">
+          <ul className="runs">
+            {caseInfo.audit.slice(0, 8).map((e) => (
+              <li key={e.id}>
+                <span>
+                  {second(e.at)} UTC
+                  <br />
+                  <span className="quiet">{AUDIT[e.action] ?? e.action}</span>
+                </span>
+                <span>{e.actor}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="quiet">Każda czynność jest zapisana z czasem i wykonawcą, a wpisy są połączone łańcuchem skrótów. Pełny dziennik jest w raporcie.</p>
         </Section>
       )}
 
@@ -703,25 +813,72 @@ function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseI
         </Section>
       )}
 
-      {graph.finished && summary && actions && (summary.narrative || llm?.available) && (
+      {graph.finished && !!summary?.gaps?.length && (
+        <Section title="Czego nie udało się odczytać" layer="fact">
+          <p>
+            {summary.gaps.length === 1 ? 'Jedno źródło nie odpowiedziało' : `${summary.gaps.length} źródeł lub zapytań nie dało odpowiedzi`} w czasie tej analizy. Wynik może być niepełny; powtórzenie analizy zwykle uzupełnia braki.
+          </p>
+          <ul className="changes-list">
+            {summary.gaps.slice(0, 6).map((g, i) => (
+              <li key={i}>
+                <strong>{g.source}</strong>: {g.message.length > 160 ? `${g.message.slice(0, 160)}…` : g.message}
+                {g.times > 1 ? ` (${g.times} razy)` : ''}
+              </li>
+            ))}
+          </ul>
+          {summary.gaps.length > 6 && <p className="quiet">Pełna lista jest w raporcie.</p>}
+        </Section>
+      )}
+
+      {graph.finished && summary && actions && (summary.dossier || llm?.available) && (
         <Section title="Opis sprawy" layer="hypothesis">
-          {summary.narrative ? (
-            <>
-              <p className="narrative">{summary.narrative.text}</p>
-              <p className="quiet">
-                Napisał model {summary.narrative.model.split('/').pop()} na tej maszynie, wyłącznie z ustaleń tej analizy. Może się mylić; rozstrzygają ustalenia i źródła.
-              </p>
-            </>
-          ) : (
-            <p className="quiet">Model językowy może opisać sprawę własnymi słowami — wyłącznie z ustaleń tej analizy, bez dostępu do sieci.</p>
-          )}
+          {summary.dossier ? <Dossier dossier={summary.dossier} /> : <p className="quiet">Model językowy może opracować sprawę: opisać ją, uporządkować dalsze czynności, porównać niepotwierdzone konta i uzasadnić zapytania. Dostaje wyłącznie ustalenia tej analizy, a każde jego zdanie jest sprawdzane.</p>}
           {llm?.available && (
             <div className="case-controls">
               <button onClick={actions.describeCase} disabled={!!llm.busy}>
-                {llm.busy === 'describe' ? 'Model pisze opis…' : summary.narrative ? 'Napisz ponownie' : 'Napisz opis sprawy'}
+                {llm.busy === 'describe' ? 'Model opracowuje sprawę…' : summary.dossier ? 'Opracuj ponownie' : 'Opracuj sprawę'}
               </button>
             </div>
           )}
+        </Section>
+      )}
+
+      {graph.finished && !!summary?.judgements?.length && (
+        <Section title="Konta w ocenie modelu" layer="hypothesis">
+          {summary.judgements.map((j) => (
+            <div key={`${j.origin}|${j.handle}`}>
+              <p>
+                Konto <strong>{j.handle}</strong>
+                {j.source ? ` (${j.source})` : ''}
+                {j.scope === 'same_nick' ? ', połączone z osobą wyłącznie takim samym nickiem' : ', niepotwierdzone'}: {j.verdict === 'same' ? 'prawdopodobnie ta sama osoba' : j.verdict === 'different' ? 'prawdopodobnie inna osoba' : 'nie da się rozstrzygnąć'}.
+              </p>
+              {!!j.reasons.length && (
+                <ul className="changes-list">
+                  {j.reasons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              )}
+              {j.rejected > 0 && <p className="quiet">Odrzucono {j.rejected} {j.rejected === 1 ? 'dowód' : 'dowody'} modelu: cytatu nie ma w treści kont.</p>}
+            </div>
+          ))}
+          <p className="quiet">Ocena nie łączy ani nie rozdziela kont. Wynik adresów z konta niepotwierdzonego przesuwa o kilka punktów, poniżej limitu tożsamości (reguła M1 w wyliczeniu wyniku); przy koncie o takim samym nicku jest wyłącznie wskazówką dla analityka.</p>
+        </Section>
+      )}
+
+      {graph.finished && !!summary?.triage?.leads.length && (
+        <Section title="Dalsze czynności" layer="hypothesis">
+          <ol className="leads">
+            {summary.triage.leads.map((l) => (
+              <li key={l.id}>
+                {l.text}
+                {l.reason && <span className="quiet"> {l.reason}</span>}
+              </li>
+            ))}
+          </ol>
+          <p className="quiet">
+            Lista wynika z ustaleń według stałych reguł. {summary.triage.byModel ? 'Kolejność i uzasadnienia zaproponował model; nie może dodać czynności spoza listy.' : 'Kolejność wynika z reguł.'}
+          </p>
         </Section>
       )}
 

@@ -1,8 +1,9 @@
 import type { Transfer } from '@olcys/core';
 import type { RunDiff, RunSummary } from '@olcys/engine';
 
-export { caseFacts } from './facts';
-import { draftRequest, formatAmount, formatPln, type Link } from '@olcys/scoring';
+export { caseFacts, caseFindings, openLeads } from './facts';
+import { knowsIdentity } from '@olcys/core';
+import { draftAttestationRequest, draftRequest, formatAmount, formatPln, type Link } from '@olcys/scoring';
 import { embeddedFonts } from './fonts';
 
 export interface ReportInput {
@@ -16,6 +17,8 @@ export interface ReportInput {
   verification: { ok: boolean; checked: number; broken: number[] };
   /** All value movements of the analysed wallets. */
   transfers: (Transfer & { subject: string })[];
+  /** Who did what in this case, newest first. */
+  audit?: { at: string; actor: string; action: string; runId?: string; detail: Record<string, unknown>; hash: string }[];
   /** What changed since the previous analysis of the same case, if there was one. */
   diff?: RunDiff;
   /** Sources used, as recorded with the run. */
@@ -34,6 +37,11 @@ const LEVEL: Record<string, string> = {
   entered: 'Osoba, o którą pytano', publisher: 'Konto, które podało wprowadzony adres', handle_variant: 'Konto o nicku różniącym się tylko zapisem',
   handle_similar: 'Konto o podobnym nicku, bez potwierdzenia',
   name_unique: 'Możliwe, że ta sama osoba (zgodne tylko imię i nazwisko)', name_ambiguous: 'Inna osoba o tym samym imieniu i nazwisku?',
+};
+export const AUDIT_PL: Record<string, string> = {
+  'analysis.started': 'uruchomiono analizę', 'analysis.repeated': 'powtórzono analizę', 'analysis.scheduled': 'analiza z harmonogramu', 'schedule.set': 'ustawiono harmonogram',
+  'schedule.cleared': 'wyłączono harmonogram', 'report.viewed': 'otwarto raport', 'report.exported': 'pobrano raport (PDF)', 'posts.read': 'model językowy przeczytał wpisy',
+  'case.described': 'model językowy opracował sprawę', 'register.viewed': 'otwarto rejestr portfeli', 'run.rescored': 'przeliczono wynik według zmienionych reguł',
 };
 const PLACEMENT: Record<string, string> = {
   own_profile: 'własny profil', sale: 'ogłoszenie', discussion: 'dyskusja na forum', mass_comment: 'masowe komentarze', quoted: 'cytat cudzej wypowiedzi',
@@ -208,6 +216,15 @@ export function renderReport(input: ReportInput): string {
     }
   }
 
+  // ---- audit trail
+  if (input.audit?.length) {
+    out.push(h2(++n, 'Dziennik czynności w sprawie', 'F'));
+    out.push('<p>Każda czynność w narzędziu jest zapisywana z czasem i wykonawcą. Wpisy są połączone łańcuchem skrótów: zmiana lub usunięcie wpisu unieważnia wszystkie późniejsze.</p>');
+    out.push(table(['Czas (UTC)', 'Kto', 'Czynność', 'Skrót wpisu'], [...input.audit].reverse().map((e) => [
+      minute(e.at), esc(e.actor), `${esc(AUDIT_PL[e.action] ?? e.action)}${e.runId ? `<br><span class="small">analiza <code>${esc(e.runId.slice(0, 8))}</code></span>` : ''}`, `<span class="mono hash">${esc(e.hash.slice(0, 16))}…</span>`,
+    ])));
+  }
+
   // ---- what the person wrote about their own crypto
   if (s.reading) {
     out.push(h2(++n, 'Co osoba sama napisała o swoich kryptowalutach', 'O'));
@@ -224,10 +241,25 @@ export function renderReport(input: ReportInput): string {
     } else out.push('<p>Żaden wpis nie wygląda na wypowiedź o własnych kryptowalutach.</p>');
     out.push('<p class="small">Wypowiedź jest wskazówką, gdzie szukać, a nie dowodem transakcji. Nie wpływa na Wskaźnik Pewności.</p>');
   }
-  if (s.narrative) {
+  if (s.dossier?.sentences.length) {
+    const d = s.dossier;
+    const cited = new Set(d.sentences.flatMap((x) => x.cites));
+    out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
+    out.push(`<div class="notice">${d.sentences.map((x) => `${esc(x.text)} <span class="small mono">[${x.cites.map(esc).join(', ')}]</span>`).join(' ')}</div>`);
+    out.push(`<p class="small">Opis napisał model ${esc(d.model)} działający na tej maszynie (${minute(d.createdAt)} UTC). Dostał wyłącznie ponumerowane ustalenia tej analizy. Każde zdanie wskazuje ustalenia, na których się opiera, a program sprawdził, że wskazane ustalenia istnieją i że każda liczba i każdy adres w zdaniu z nich pochodzi. ${d.rejected.length ? `Kontrola odrzuciła ${d.rejected.length} ${d.rejected.length === 1 ? 'zdanie' : 'zdań'} modelu; są wymienione niżej.` : 'Kontrola nie odrzuciła żadnego zdania.'}</p>`);
+    out.push(table(['Nr', 'Warstwa', 'Ustalenie', 'Gdzie sprawdzić'], d.findings.filter((f) => cited.has(f.id)).map((f) => [
+      `<span class="mono">${esc(f.id)}</span>`, f.layer === 'fact' ? 'fakt źródłowy' : f.layer === 'computed' ? 'wynik obliczony' : 'wniosek do weryfikacji', esc(f.text), f.source ? `<span class="small">${esc(f.source)}</span>` : '<span class="small">ustalenie tej analizy</span>',
+    ])));
+    if (d.rejected.length) out.push(`<p class="small">Zdania odrzucone przez kontrolę (nie są częścią opisu): ${d.rejected.map((r) => `„${esc(r.text)}” — ${esc(r.reason)}`).join('; ')}.</p>`);
+  } else if (s.narrative) {
     out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
     out.push(`<div class="notice">${esc(s.narrative.text).replace(/\n+/g, '<br>')}</div>`);
     out.push(`<p class="small">Tekst wygenerował model ${esc(s.narrative.model)} działający na tej maszynie, wyłącznie z ustaleń zawartych w tym raporcie (${minute(s.narrative.createdAt)} UTC). Może zawierać błędy; rozstrzygają ustalenia i źródła, nie ten opis.</p>`);
+  }
+  if (s.triage?.leads.length) {
+    out.push(h2(++n, 'Dalsze czynności', 'W'));
+    out.push(`<p>Lista wynika z ustaleń według stałych reguł. ${s.triage.byModel ? `Kolejność i uzasadnienia zaproponował model ${esc(s.triage.model)}; nie może on dodać czynności spoza listy.` : 'Kolejność wynika z reguł.'}</p>`);
+    out.push(table(['Lp.', 'Czynność', 'Dlaczego teraz'], s.triage.leads.map((l, i) => [String(i + 1), esc(l.text), l.reason ? esc(l.reason) : '<span class="small">—</span>'])));
   }
 
   // ---- profiles over time
@@ -334,7 +366,7 @@ export function renderReport(input: ReportInput): string {
     const [mine, theirs] = [w.members.has(t.from), w.members.has(t.to)];
     const other = mine ? t.to : t.from;
     const what = mine && theirs ? 'przeniesienie między własnymi adresami' : mine ? `wypłata do: ${esc(names.get(other) ?? short(other))}` : `wpływ od: ${esc(names.get(other) ?? short(other))}`;
-    rows.push([minute(t.at), `<span class="mono">${esc(short(w.root))}</span>`, what, `${mine && !theirs ? '−' : theirs && !mine ? '+' : ''}${esc(formatAmount(t.amount))} ${esc(t.asset)}`, `<span class="mono hash">${esc(short(t.txHash))}</span>`]);
+    rows.push([minute(t.at), `<span class="mono">${esc(short(w.root))}</span>`, what, `${mine && !theirs ? '−' : theirs && !mine ? '+' : ''}${esc(formatAmount(t.amount))} ${esc(t.asset)}`, `<span class="mono hash">${esc(short(t.txHash))}</span>${t.network ? `<br><span class="small">sieć ${esc(t.network)}</span>` : ''}`]);
   }
   out.push(rows.length
     ? `<p>Wszystkie przelewy analizowanych portfeli w kolejności czasowej (czas UTC).</p>${table(['Data', 'Portfel', 'Zdarzenie', '<span class="r">Kwota</span>', 'Transakcja'], rows.slice(0, 400))}${rows.length > 400 ? `<p class="small">Pokazano pierwsze 400 z ${rows.length} przelewów.</p>` : ''}`
@@ -342,10 +374,26 @@ export function renderReport(input: ReportInput): string {
 
   // ---- 8. request drafts
   const offRamps = s.chain.activity.flatMap((w) => w.offRamps);
-  if (offRamps.length) {
-    out.push(h2(++n, 'Projekt zapytania do giełdy', 'W'));
-    out.push('<p>Giełda przypisuje adres depozytowy jednemu, zweryfikowanemu klientowi. Poniższe projekty zawierają dokładny wykaz zaobserwowanych wpłat.</p>');
-    for (const o of offRamps) out.push(`<pre>${esc(draftRequest(o, { caseTitle: input.caseTitle, runId: s.runId, generatedAt: input.generatedAt }))}</pre>`);
+  const attested = (s.attestations ?? []).filter(knowsIdentity).filter((x, i, all) => all.findIndex((y) => y.issuer === x.issuer && y.address === x.address) === i);
+  const reasoning = (key: string) => {
+    const note = s.requestNotes?.find((r) => r.key === key);
+    return note?.sentences.length
+      ? `\n\nUzasadnienie (projekt napisany przez model językowy; w nawiasach ustalenia, na których opiera się zdanie):\n${note.sentences.map((x) => `${x.text} [${x.cites.join(', ')}]`).join(' ')}`
+      : '';
+  };
+  if (offRamps.length || attested.length) {
+    out.push(h2(++n, 'Projekty zapytań', 'W'));
+    if (offRamps.length) out.push('<p>Giełda przypisuje adres depozytowy jednemu, zweryfikowanemu klientowi. Poniższe projekty zawierają dokładny wykaz zaobserwowanych wpłat.</p>');
+    for (const o of offRamps) out.push(`<pre>${esc(draftRequest(o, { caseTitle: input.caseTitle, runId: s.runId, generatedAt: input.generatedAt }) + reasoning(`deposit:${o.depositAddress}`))}</pre>`);
+    if (attested.length) out.push('<p>Instytucja, która publicznie poświadczyła adres jako adres swojego zweryfikowanego klienta, zna tożsamość tego klienta.</p>');
+    for (const a of attested) out.push(`<pre>${esc(draftAttestationRequest({ ...a, ...s.attestations!.find((y) => y.issuer === a.issuer && y.address === a.address && y.value) }) + reasoning(`attestation:${a.issuer}:${a.address}`))}</pre>`);
+  }
+
+  // ---- what could not be read
+  if (s.gaps?.length) {
+    out.push(h2(++n, 'Czego nie udało się odczytać', 'F'));
+    out.push('<p>Poniższe źródła lub zapytania nie dały odpowiedzi w czasie tej analizy. Wynik może nie zawierać tego, co by pokazały; powtórzenie analizy zwykle uzupełnia braki.</p>');
+    out.push(table(['Źródło', 'Co się stało', 'Ile razy'], s.gaps.slice(0, 40).map((g) => [esc(g.source), esc(g.message), String(g.times)])));
   }
 
   // ---- 9. sources and reproducibility

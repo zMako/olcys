@@ -22,12 +22,21 @@ Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, i
 |---|
 | ![Zmiany między analizami](docs/screenshots/zmiany-miedzy-analizami.png) |
 
+| Opis sprawy: każde zdanie modelu wskazuje ustalenia | Dalsze czynności w kolejności zaproponowanej przez model |
+|---|---|
+| ![Opis sprawy](docs/screenshots/opis-sprawy.png) | ![Dalsze czynności](docs/screenshots/dalsze-czynnosci.png) |
+
+| Rejestr polskich portfeli zbudowany z danych publicznych (liczby zbiorcze) |
+|---|
+| ![Rejestr](docs/screenshots/rejestr.png) |
+
 Przykładowy raport: [`docs/przykladowy-raport.pdf`](docs/przykladowy-raport.pdf).
 
 ## Założenia
 
 - **Tylko dane publiczne.** Silnik łączy się wyłącznie z hostami z listy dozwolonych; każda próba połączenia jest zapisywana.
 - **Wszystko da się odtworzyć.** Każda pobrana strona trafia do magazynu dowodów z adresem URL, datą pobrania i skrótem SHA-256, a kolejne wpisy są połączone łańcuchem skrótów — zmiana dowolnego rekordu jest wykrywalna.
+- **Wynik mówi, czego w nim brakuje.** Źródło, które nie odpowiedziało, odmówiło albo zwróciło błąd, nie przerywa analizy, ale zostaje zapisane; panel wyniku i raport mają sekcję „Czego nie udało się odczytać”. Zapytania, od których zależy kwota (kursy NBP, kursy rynkowe, etykiety giełd, historia sieci Base), są ponawiane, zanim brak zostanie odnotowany.
 - **Brak chmury publicznej.** Całość działa lokalnie; baza to PostgreSQL.
 - **Rozszerzalność.** Nowe źródło to jedna implementacja interfejsu `SourceConnector`, nowa sieć blockchain to jeden `AddressCodec`.
 - **Dane testowe są syntetyczne.** Wbudowane środowisko to trzy fikcyjne serwisy (forum, repozytoria kodu, ogłoszenia P2P) i eksplorator łańcucha bloków z fikcyjnymi osobami i znaną „prawdą” do sprawdzania wyników.
@@ -38,7 +47,7 @@ Wymagany Node.js 20.19 lub nowszy.
 
 ```bash
 npm install
-npm test                          # 152 testy, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
+npm test                          # 217 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
 npm run world                     # terminal 1: środowisko syntetyczne (porty 4101–4106)
 npm run analyze -- szklane_domy   # terminal 2: analiza od jednego nicku, wynik w konsoli
 npm run api                       # terminal 2: API HTTP na porcie 4000
@@ -60,6 +69,9 @@ Jeden ekran, jedna historia. Po wpisaniu identyfikatora graf rośnie krok po kro
 - **Trzy rodzaje stwierdzeń.** Każdy blok jest oznaczony jako fakt źródłowy, wynik obliczeń albo wniosek do weryfikacji.
 - **Analizy tej sprawy.** W panelu wyniku ustawia się powtarzanie analizy, uruchamia ją ponownie i otwiera wcześniejsze wyniki. Analiza, która wykryła zmiany, otwiera się sama i pokazuje ich listę; nowe adresy i konta są w grafie oznaczone słowem „nowy”.
 - **Raport.** Druga zakładka pokazuje gotowy raport z przyciskiem pobrania PDF.
+- **Rejestr.** Trzecia zakładka pokazuje lokalnie zbudowany rejestr polskich portfeli: liczby, giełdy, na które wpłacano, i listę portfeli z wpłatami na giełdy. Dane osobowe są zakryte do chwili kliknięcia „Odkryj dane”. Przycisk „Analizuj” przy wierszu uruchamia pełną analizę tego portfela.
+- **Opracowanie sprawy przez model językowy.** Przycisk „Opracuj sprawę” uruchamia cztery kroki, a wynik każdego pojawia się od razu: opis sprawy ze wskazaniem ustaleń przy każdym zdaniu (kliknięcie numeru pokazuje ustalenie i źródło), uporządkowana lista dalszych czynności, ocena niepotwierdzonych kont, uzasadnienia projektów zapytań.
+- **Dziennik czynności.** Każda czynność analityka i harmonogramu jest zapisana z czasem i wykonawcą; wpisy łączy łańcuch skrótów, a `GET /api/audit` sprawdza, czy żaden nie został zmieniony.
 - Czcionki są dołączone do aplikacji; interfejs nie pobiera niczego z zewnętrznych serwerów.
 
 ## Co robi analiza
@@ -79,13 +91,22 @@ W interfejsie obok pola wyszukiwania wybiera się źródła: „Środowisko test
 |---|---|---|
 | GitHub (API) | profil, README profilu, README i plik FUNDING własnych repozytoriów, klucze publiczne SSH konta, loginy zawierające szukany nick; z tokenem także wyszukiwanie adresu w kodzie | bez tokenu 60 zapytań na godzinę na adres IP — ustaw `GITHUB_TOKEN` |
 | Eksplorator Bitcoin (format Esplora) | saldo, historia, adresy finansujące tę samą transakcję (rozszerzenie portfela) | `BITCOIN_API_URL`; może wskazywać własny eksplorator |
-| Węzeł Ethereum (JSON-RPC) | czy adres ma kod (kontrakt, delegacja, zwykłe konto), liczba transakcji, saldo | `ETH_RPC_URL`; historia przelewów wymaga indeksera. Z `ETH_INDEXER_URL` (API w stylu Blockscout) także adres, który utworzył kontrakt |
+| Węzeł Ethereum (JSON-RPC) | czy adres ma kod (kontrakt, delegacja, zwykłe konto), liczba transakcji, saldo | `ETH_RPC_URL` |
+| Indekser Ethereum (API w stylu Blockscout) | historia przelewów adresu (ether, przelewy wewnętrzne, tokeny ERC-20), adres, który utworzył kontrakt | `ETH_INDEXER_URL`; tylko sieć główna — indekser sieci Base odrzuca klientów automatycznych i nie próbujemy tego obchodzić |
+| Publiczne etykiety adresów | które adresy należą do giełd, routerów, mostów | `ETH_LABELS_URL`; jedno zbiorcze zapytanie na 40 adresów |
 | ENS | adres dla nazwy, nazwa zgłoszona przez adres, rekordy właściciela | przez ten sam węzeł |
 | NBP | kursy średnie, tabela A | `api.nbp.pl` |
 | Wayback Machine | dawne wersje profili | `web.archive.org` |
 | Coinbase Exchange | dzienne kursy BTC i ETH | publiczne dane rynkowe |
 | Farcaster | profil, opis, lokalizacja, połączone konta, ostatnie wpisy; portfele dołączone do konta wraz z oświadczeniem podpisanym kluczem portfela | bez klucza; podpis każdego oświadczenia jest sprawdzany tutaj |
 | Keybase | konta potwierdzone w innych serwisach, adresy Bitcoin podpisane kluczem konta | podpisy sprawdza Keybase; narzędzie to zaznacza w wyniku |
+| Sieć Base (Alchemy, darmowy plan) | historia przelewów adresu w sieci Base: ether i tokeny | `ALCHEMY_KEY`; klucz idzie w nagłówku i nie trafia do magazynu dowodów. Bez klucza Base nie jest analizowana |
+| Publiczne poświadczenia o adresach (EAS w sieci Base) | co o adresie poświadczają: Coinbase (zweryfikowany klient, kraj weryfikacji, płatny abonament), Bondex (weryfikacja tożsamości, powiązane konta), Human Passport (jedna rzeczywista osoba), Link3 (konto X) | `ATTESTATIONS_URL`; tylko poświadczenia nieodwołane i niewygasłe, od wystawców z tabeli w `packages/connectors/src/eas.ts` |
+| Token Binance dla zweryfikowanych klientów (BNB Smart Chain) | czy adres posiada niezbywalny token wydawany klientom po weryfikacji tożsamości | `BSC_RPC_URL`; jedno zapytanie do węzła |
+| Bluesky | profil i własne wpisy konta o podanym nicku | publiczne API bez logowania |
+| Lens | profil i adres, który jest właścicielem konta (poświadcza sieć, reguła C3) | publiczne API |
+| Telegram | nazwa i opis z publicznej strony podglądu `t.me/<nick>` | tylko profil, bez wiadomości |
+| Tokeny obecności z wydarzeń w Polsce (POAP) | czy portfel odebrał token wydawany uczestnikom wydarzenia w Polsce | z lokalnego zbioru (`npm run corpus -- poap`); okoliczność, nie dowód |
 | Lokalny indeks kont | odpowiedź na pytanie „które konto dołączyło ten adres?” | budowany poleceniem `npm run corpus -- farcaster`; dane zostają na dysku |
 
 Każdy zestaw ma własną listę dozwolonych hostów; żądanie do innego hosta jest odrzucane i zapisywane. Token dostępu jest wysyłany w nagłówku i nigdy nie trafia do magazynu dowodów.
@@ -157,8 +178,11 @@ W scenariuszu testowym osoba nie publikuje między 00:00 a 07:00 i żaden z 19 p
 | A1 | Wpłata zgodna z publicznie podaną kwotą | +10 pkt proc. za każdą, najwyżej +20 |
 | N1 | Nazwa adresu wskazuje konto, które podaje ten adres | co najmniej 95% |
 | C3 | Oświadczenie podpisane, sprawdzone przez serwis (Keybase, sieć Farcaster dla portfeli kontraktowych) | co najmniej 95% |
+| V1 | Instytucja publicznie poświadcza coś o właścicielu adresu (giełda: zweryfikowany klient i kraj; usługa tożsamości; organizator wydarzenia) | bez punktów; przy giełdzie i weryfikacji tożsamości wskazuje, kto zna właściciela |
 | K3 | Adres nie został podany, ale utworzył kontrakt, który osoba podaje jako własny | najwyżej 70%; +10 pkt proc., jeśli adres jest też podany wprost |
 | R2 | Przelewy z adresu wychodzą w godzinach, w których osoba nie jest aktywna | −10 pkt proc. |
+| M1 | Ocena modelu językowego dla konta niepotwierdzonego, poparta cytatami z obu kont | +10 pkt proc. (poniżej limitu T1) albo −15 pkt proc. |
+| E1 | Adres wprowadzony przez analityka, którego nie opublikowało żadne konto | 100% jako punkt wyjścia sprawy; narzędzie nie wskazuje osoby |
 | C1 | Podpisana wiadomość wymieniająca konto | 100% |
 | C2 | Podpisana wiadomość bez wskazania konta | +30 pkt proc., najwyżej 95% |
 | T1 | Limit pewności tożsamości: inny zapis nicku, tylko nazwisko, nick z dopiskiem | najwyżej 79%, 59%, 49% lub 39% |
@@ -168,6 +192,8 @@ W scenariuszu testowym osoba nie publikuje między 00:00 a 07:00 i żaden z 19 p
 | Q1 | Adres tylko zacytowany z cudzej wypowiedzi | nie do przypisania |
 
 Liczy się najsilniejsze miejsce publikacji; powtórzenia w jednym serwisie nie są punktowane. Konto prywatne z delegacją EIP-7702 i portfel kontraktowy (np. Safe) nie są wykluczane, mimo że mają kod.
+
+**Częstość imienia i nazwiska.** Dopasowanie wyłącznie po imieniu i nazwisku jest warte tyle, ile rzadkość tego nazwiska. Do narzędzia dołączone są statystyki rejestru PESEL z dane.gov.pl (osoby żyjące, stan na 20.01.2026: 71 439 imion i 598 476 nazwisk). Szacunkowa liczba osób o danym imieniu i nazwisku to liczba osób o tym imieniu × liczba osób o tym nazwisku ÷ liczba osób tej płci, przy założeniu, że imiona i nazwiska łączą się niezależnie. „Jan Kowalski” to około 1 440 osób, więc limit T1 spada do 15%; od 100 osób wynosi 25%. Imię i nazwisko, które według szacunku nosi mniej niż jedna osoba („Sławomir Mentzen”: 0,07), podnosi limit do 75% — nie wyżej, bo nazwę konta każdy wpisuje sam. Szacunek i liczby z rejestru są wypisane w uzasadnieniu limitu.
 
 Pasma: 80–100% bardzo wysokie, 60–79% prawdopodobne, 40–59% średnie, 1–39% niskie / szum, 0% wykluczone.
 
@@ -180,7 +206,20 @@ Pasma: 80–100% bardzo wysokie, 60–79% prawdopodobne, 40–59% średnie, 1–
 
 Kursy NBP pobierane są z publicznego API banku (`NBP_API_URL=https://api.nbp.pl`); domyślnie używana jest dołączona kopia rzeczywistych tabel, żeby narzędzie działało bez Internetu.
 
-### Konta, które podpisują swoje adresy
+### Przepływy na prawdziwych adresach Ethereum
+
+W trybie na żywo adres Ethereum przechodzi tę samą analizę co w środowisku testowym: historia przelewów z indeksera, etykiety kontrahentów z publicznej usługi etykiet, a dla nieoznaczonych odbiorców — sprawdzenie, czy przekazują wszystko dalej na oznaczony adres giełdy (reguła D1). W ten sposób rozpoznawany jest osobisty adres depozytowy na giełdzie, którego żadna lista etykiet nie zawiera.
+
+- **Token nie jest tym, za co się podaje.** USDT, USDC, DAI, WETH i WBTC są rozpoznawane po adresie kontraktu. Token, który tylko nazywa się „USDC”, jest opisywany jako „USDC (inny kontrakt)” i nie wchodzi do wyceny.
+- **Jedno wolne zapytanie nie unieważnia analizy.** Jeśli historii jakiegoś kontrahenta nie da się pobrać, pomijany jest ten kontrahent, a nie cały portfel. Kontrakty nie są śledzone jako możliwe adresy depozytowe.
+- **Sieć Base.** Ten sam adres działa też w sieci Base, gdzie rozlicza się większość użytkowników Coinbase i Farcaster. Jej historia jest pobierana osobno i łączona z historią sieci głównej; każdy przelew ma w raporcie oznaczenie sieci. Tokeny-reklamy (nazwa będąca odnośnikiem lub hasłem „claim”) są pomijane: ich kontrakty mogą wpisać jako nadawcę dowolny adres, także giełdę. Udział środków przekazanych dalej na giełdę (reguła D1) liczy się osobno dla każdego aktywa.
+- **Prawdziwa polska sprawa, od nicku do kwoty:** konto publiczne z dwoma portfelami potwierdzonymi podpisem; Coinbase poświadcza, że właściciel jednego z nich jest klientem zweryfikowanym w Polsce; wpłaty na Bybit (sieć Base, adres depozytowy rozpoznany regułą D1 i drugi z etykietą) oraz na Kraken (sieć główna); wartość do wyjaśnienia 11 072 zł za lata 2024–2025. Model językowy porównał konta połączone wyłącznie takim samym nickiem i wskazał, że konto w innym serwisie pisze po japońsku — prawdopodobnie inna osoba.
+- **Kontrahenci z list.** Do narzędzia dołączone są dwie publiczne listy adresów: sankcyjna OFAC SDN (Bitcoin, Ethereum, Tron) i zgłoszenia oszustw (darklist MyEtherWallet). Przelew z takim adresem lub na taki adres daje wskaźnik Z1 albo Z2; nie jest liczony jako wyjście do walut tradycyjnych.
+- **Polski rejestr działalności w zakresie walut wirtualnych.** Dla każdej giełdy, na którą wpłacano, narzędzie sprawdza, czy podmiot o tej nazwie figurował w rejestrze prowadzonym przez Dyrektora Izby Administracji Skarbowej w Katowicach (1 841 wpisów, wersja archiwalna, stan na 2 lipca 2026 r.). Zgodność dotyczy samej nazwy; numer wpisu, NIP i KRS trafiają do projektu zapytania jako wskazówka, do kogo w kraju można się zwrócić.
+- **Sprawdzone na prawdziwym koncie publicznym:** dwa portfele potwierdzone podpisem, wpłata 5 169,43 USDC na adres depozytowy rozpoznany regułą D1 jako adres giełdy Coinbase, wartość do wyjaśnienia 19 059 zł za 2025 r. Analiza trwała 13 sekund; dla portfela z 1 500 transakcjami — około dwóch minut.
+
+
+### Podpisane oświadczenia
 
 W części serwisów powiązanie konta z adresem nie jest zdaniem w tekście, tylko podpisanym oświadczeniem. Narzędzie korzysta z nich wprost.
 
@@ -198,7 +237,9 @@ Sprawdziliśmy pomiarem, skąd brać dane na dużą skalę.
 |---|---|---|
 | Common Crawl, losowa próbka | 10,2 mln stron (80 GB tekstu) w 454 s; prawidłowy adres na 336 stronach z miliona; po polsku 25 stron z adresem | adresy w zwykłej prozie są za rzadkie, żeby szukać ich czytaniem całej sieci |
 | Common Crawl, pełna lista domeny `.pl` | 35,8 mln stron na 523 946 hostach; 34 510 stron ze słowem kluczowym w adresie | lista kandydatów; o przydatności hosta decyduje dopiero treść |
-| Farcaster, konta polskie | 141 kont, 125 z portfelami, 254 adresy, 70 z połączonym kontem X | każdy adres z podpisanym oświadczeniem; zbiór rośnie w tle |
+| Common Crawl, strony ze słowem kluczowym (próba) | pobrano 2 460 stron z 5 917 hostów, zanim magazyn odmówił dalszych zapytań; adres na 2 stronach | pomiar niepełny; potwierdza, że adresy są rzadkie także tam |
+| Farcaster, konta polskie | 374 konta, 353 z portfelami, 805 adresów, 230 z połączonym kontem X | każdy adres z podpisanym oświadczeniem; szczegóły w tabeli rejestru niżej |
+| Uzupełnienie kont z innych rejestrów | nazwy ENS na portfelach 44 kont (rekordy wskazujące inne konta tylko u 2); konta Keybase dla połączonych kont X: 0 z 70 | w tej grupie realne powiązania między serwisami to Farcaster–X i portfel–nazwa ENS |
 
 Polskie konta są wyszukiwane bez czytania wszystkich 3,4 mln kont: publiczna lista kanałów → kanały polskie (język, kraj, miasta) → ich obserwujący → ocena każdego konta (podana lokalizacja, język opisu, flaga, strona `.pl`; powody są zapisywane) → listy obserwowanych przez konta polskie, i tak w kółko. Zapytania są ograniczone do kilku na sekundę, a tam, gdzie serwis podaje limit godzinowy, do tego limitu.
 
@@ -208,6 +249,57 @@ npm run corpus -- keywords                  # Common Crawl: hosty ze słowem klu
 npm run corpus -- listing --tld pl          # Common Crawl: wszystkie strony jednej domeny najwyższego poziomu
 npm run corpus -- sample --files 200        # Common Crawl: losowa próbka przez filtr adresów
 ```
+
+**Rejestr polskich portfeli.** Dwa źródła, oba publiczne i oba oparte na czymś więcej niż deklaracja:
+
+| Warstwa | Skąd | Stan na 22.11.2026 |
+|---|---|---|
+| Portfele z poświadczeniem giełdy | Coinbase wystawia w sieci Base publiczne poświadczenia: „właściciel tego portfela jest naszym zweryfikowanym klientem” i osobno „…zweryfikowanym w kraju XX”. Pobierane są wszystkie nieodwołane poświadczenia z krajem PL (`npm run corpus -- attestations`). | 3 876 portfeli |
+| Konta Farcaster polskich użytkowników | Sieć obserwacji: kandydaci są sprawdzani w kolejności liczby polskich sąsiadów; o przyjęciu decyduje poświadczony portfel, współrzędne podanej lokalizacji albo język opisu (`npm run corpus -- expand`). Każde oświadczenie portfela jest sprawdzane przy pobraniu. | 374 konta, 805 portfeli; 230 z kontem X, 203 z podaną lokalizacją |
+| Nazwy portfeli | Nazwa Base wybrana przez właściciela i rekordy, które do niej dołączył (`npm run corpus -- basenames --all`). | 4 500 sprawdzonych: 1 095 z nazwą, 233 z rekordami (konto X: 153, Farcaster: 98, GitHub: 53) |
+| Token Binance dla zweryfikowanych klientów | Niezbywalny token w sieci BNB Smart Chain, wydawany po weryfikacji tożsamości (`scanBabt`). | 319 portfeli rejestru; 275 z nich ma też poświadczenie Coinbase z krajem PL — za tymi portfelami stoją dwie giełdy, które znają właściciela |
+| Inne poświadczenia | Coinbase One (płatny abonament), Bondex (weryfikacja tożsamości i powiązane konta), Human Passport. | 75 portfeli rejestru ma coś ponad poświadczenia konta i kraju |
+| Tokeny obecności z wydarzeń w Polsce | Indeks POAP: 274 wydarzenia z krajem „Polska” (`ingestPolishPoaps`). | 1 242 portfele z wydarzeń stacjonarnych, 239 w co najmniej dwóch różnych dniach; to osoby, które były w Polsce, niekoniecznie rezydenci |
+
+Rejestr ma 4 500 różnych portfeli; 181 z nich jest w obu głównych warstwach naraz: ma poświadczenie giełdy i publiczny profil właściciela. Poświadczenie pozwoliło też poprawić własny błąd: 74 konta odrzucone wcześniej jako „nie polskie” (brak lokalizacji, opis po angielsku) mają portfel poświadczony jako polski.
+
+**Dokąd trafiły środki — cały rejestr.** `npm run corpus -- flows` odczytuje historię każdego portfela w sieci Base i stosuje te same reguły co w pojedynczej sprawie (L1: przelew na oznaczony adres giełdy; D1: przelew na adres, który przekazał środki dalej na giełdę). Liczone są tylko aktywa mające kurs (USDC, USDT, DAI, ETH, WETH, WBTC) i tylko etykiety samej giełdy, nie jej innych produktów.
+
+| Pomiar (22.11.2026) | Wynik |
+|---|---|
+| Portfele przejrzane w sieci Base (rejestr i 234 portfele stałych bywalców wydarzeń) | 4 734 |
+| Portfele z jakąkolwiek historią w Base | 3 014 |
+| Portfele z wpłatą na giełdę | 819 (27% aktywnych) |
+| …w tym poświadczone przez Coinbase jako polskie | 691 |
+| …w tym należące do znanego konta publicznego | portfele 178 kont |
+| Wpłaty na giełdy | 5 331; łącznie 1 829 045 w stablecoinach i 520,16 ETH |
+| Giełdy według liczby portfeli | Coinbase 336, Binance 229, Bybit 206, OKX 76, Bitget 53, MEXC 51 |
+| Sposób rozpoznania | 962 pary portfel–adres depozytowy regułą D1, 123 po etykiecie (L1) |
+
+Wynik jest w interfejsie w zakładce „Rejestr”: lista portfeli od największych wpłat, z poświadczeniami i giełdami; jedno kliknięcie zamienia wiersz w sprawę. Przykład takiej sprawy (portfel bez znanego konta, 20 sekund): Coinbase poświadcza klienta zweryfikowanego w Polsce z płatnym abonamentem, portfel odebrał token obecności na wydarzeniu w Warszawie, a 12 wpłat (USDC i ETH) trafiło na dwa adresy depozytowe Coinbase — wartość do wyjaśnienia 2 036 895 zł za lata 2024–2025. Narzędzie nie wskazuje osoby; wskazuje, kto ją zna, i przygotowuje projekt zapytania.
+
+Skan był wykonany regułą ostrożniejszą niż obecna (adres uznawano za depozytowy tylko wtedy, gdy przekazał dalej każde z przesłanych aktywów), więc liczby są dolnym oszacowaniem.
+
+**Źródła sprawdzone i odrzucone — z pomiarem.**
+
+| Źródło | Co zmierzono | Wniosek |
+|---|---|---|
+| Bluesky, wyszukiwanie kont | 115 zapytań, 73 110 kont, 3 795 polskich; konto polskie podające portfel: 0 | nie powiększa rejestru; przydatne tylko jako źródło na żywo dla znanego nicku |
+| Farcaster, przegląd wszystkich kont po kolei | 171 681 kont (numery 1–180 000): 7 nowych kont polskich | przerwany; sieć obserwacji znajduje je taniej |
+| Farcaster, pytanie „czyje to konto?” po adresie | usługa wymaga logowania | niedostępne; odpowiada na nie lokalny indeks |
+| Historia sieci Base bez klucza | trzy publiczne węzły (limity 100–50 000 bloków na zapytanie, brak danych archiwalnych), cztery indeksery (wymagany klucz lub płatny plan) | potrzebny darmowy klucz Alchemy |
+| Strony zbiórek z adresem do wpłat | w próbce Common Crawl 4 polskie hosty | nie zbudowano: brak publicznego wykazu takich adresów |
+| Nostr | nicki nie są unikalne (1 403 profile o tym samym), brak stabilnej usługi wyszukiwania bez klucza | nie zbudowano |
+
+Dla organu poświadczenie to dwie informacje naraz: portfel należy do osoby zweryfikowanej w Polsce, a giełda, do której można wystąpić, wie, kto to jest. W analizie na żywo poświadczenie pojawia się na paragonie adresu (V1) i jako pierwsza pozycja listy „co rozstrzygnęłoby wątpliwości”. Nie zmienia punktacji.
+
+**Nazwy Base na żywo.** Oprócz ENS sprawdzana jest nazwa, którą adres wybrał w sieci Base, i jej rekordy; rekord `xyz.farcaster` prowadzi do konta Farcaster. Rekord nazwy potwierdza konto tylko w serwisie, o którym mówi: „com.twitter: x” nie łączy z kontem „x” w innym serwisie.
+
+**Profile X.** Publicznie i zgodnie z regulaminem nie da się ich czytać bez płatnego API. Sprawdzone: archiwalne kopie stron profili w Wayback Machine istnieją, ale nie zawierają nazwy ani opisu.
+
+**Wyszukiwanie w drugą stronę.** Sieć pozwala odczytać portfele i połączenia konta, ale nie pozwala zapytać, do kogo należy adres ani nick z innego serwisu. Lokalny indeks odpowiada na oba pytania: wpisany adres, nick z serwisu X albo nazwa ENS prowadzi do konta Farcaster, które zostaje ponownie pobrane z sieci (z podpisanymi oświadczeniami i wpisami), więc dowód w analizie jest aktualny i z pierwszej ręki. Powiązanie liczy się tylko wtedy, gdy nadal istnieje: konto X jest wciąż połączone, a portfel o danej nazwie wciąż dołączony.
+
+`npm run corpus -- enrich` uzupełnia konta o nazwy ENS ich portfeli i dowody z Keybase.
 
 Wyniki trafiają do katalogu `.corpus/`, który nie jest częścią repozytorium: to treści prawdziwych osób.
 
@@ -219,7 +311,16 @@ Wpisy osoby są nie tylko przeszukiwane pod kątem adresów, ale czytane: czy au
 2. **Klasyfikator.** Każdy pozostały wpis jest zamieniany na wektor przez model działający lokalnie (multilingual-e5-small) i oceniany przez mały klasyfikator, który dostaje też trzy znaki leksykalne: nazwę aktywa lub kwotę, pierwszą osobę, czasownik kupna, sprzedaży, posiadania lub otrzymania. Tysiące wpisów na sekundę.
 3. **Model językowy.** Wpisy wybrane przez klasyfikator czyta w całości model językowy uruchomiony na tej samej maszynie (domyślnie Bielik 11B przez Ollama) i zwraca rodzaj wypowiedzi, aktywo, ilość, kwotę. Jego odpowiedź jest sprawdzana, a nie przyjmowana: aktywo musi wyglądać jak symbol, waluta jak waluta.
 
-Ten sam model na żądanie pisze opis sprawy — wyłącznie z listy ustaleń analizy, z zakazem wypowiadania się o prawie i podatku. Opis jest oznaczony jako wygenerowany i nie zastępuje ustaleń.
+**Model jako pomocnik analityka — z kontrolą każdego zdania.** Ten sam model na żądanie opracowuje sprawę. Dostaje wyłącznie ponumerowane ustalenia analizy (U1, U2, …), każde oznaczone jako fakt źródłowy, wynik obliczony albo wniosek, i nie ma dostępu do sieci.
+
+| Zadanie | Co pisze model | Co sprawdza program |
+|---|---|---|
+| Opis sprawy | 5–8 zdań, każde ze wskazaniem ustaleń | wskazane ustalenia istnieją; każda liczba i każdy adres w zdaniu występuje we wskazanych ustaleniach; słowa „poświadczenie”, „podpis”, „sankcje” tylko tam, gdzie mówi o nich wskazane ustalenie; brak ocen prawnych i zarzutów; zdanie będące kopią ustalenia jest usuwane |
+| Uzasadnienie projektu zapytania | 2–4 zdania do zapytania do giełdy lub wystawcy poświadczenia | jak wyżej |
+| Kolejność dalszych czynności | porządek i jedno zdanie uzasadnienia | czynności pochodzą z reguł, model nie może dodać własnej; nieznane i powtórzone numery są pomijane |
+| Ocena niepotwierdzonego konta | ta sama osoba, inna, nie wiadomo — z cytatami z obu kont | każdy cytat musi dosłownie występować w treści konta; przy werdykcie „ta sama” cytaty muszą mieć wspólne słowo, a nick, nazwa wyświetlana i adresy się nie liczą; werdykt bez dowodu staje się „nie wiadomo” |
+
+Zdanie, które nie przeszło kontroli, wraca do modelu raz z podaniem powodu; jeśli znów nie przejdzie, zostaje poza opisem i jest pokazane osobno, z powodem odrzucenia. Ocena konta nigdy nie łączy ani nie rozdziela kont: przesuwa wynik adresów z niepotwierdzonego konta o +10 lub −15 pkt proc. poniżej limitu tożsamości (reguła M1), a przy kontach połączonych wyłącznie takim samym nickiem jest tylko wskazówką. Model nie decyduje, co jest przeszukiwane.
 
 **Zmierzona jakość klasyfikatora.** Uczony na 1 400 prawdziwych wpisach polskich kont, z których po odsianiu i drugim czytaniu 23 to wypowiedzi o własnych kryptowalutach (1,6%).
 
@@ -332,6 +433,8 @@ Evidence chain: intact (83 snapshots verified).
 | multilingual-e5-small (model wektorów zdań) | MIT |
 | Bielik 11B v3.1 (model językowy, SpeakLeash) | Apache-2.0 |
 | Ollama (serwer modelu językowego) | MIT |
+
+Dane dołączone do narzędzia: statystyki imion i nazwisk z rejestru PESEL (dane.gov.pl, zbiory 1667 i 1681, CC0 1.0); rejestr działalności w zakresie walut wirtualnych (gov.pl, Izba Administracji Skarbowej w Katowicach, informacja publiczna); lista sankcyjna OFAC SDN w opracowaniu 0xB10C (dane rządu USA, domena publiczna); darklist MyEtherWallet (MIT).
 
 Dane referencyjne dołączone do środowiska testowego: kursy średnie NBP (tabela A, api.nbp.pl) oraz dzienne kursy zamknięcia BTC i ETH (publiczne dane rynkowe Coinbase Exchange). Odświeżenie: `node scripts/fetch-reference-data.mjs`.
 | @electric-sql/pglite, TypeScript | Apache-2.0 |
