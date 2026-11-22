@@ -7,7 +7,8 @@ import { beginRun, type RunSummary, type StoredRunEvent } from '@olcys/engine';
 import { HERO_ID, generateWorld, startWorld, type RunningWorld } from '@olcys/world';
 import { GraphView } from '../src/graph/Graph';
 import { addressId, buildGraph, layoutGraph } from '../src/graph/model';
-import { Panel } from '../src/Panel';
+import { Detail } from '../src/Panel';
+import { StepAddresses, StepChain, StepInput, StepTraces, type StepProps } from '../src/steps';
 import { describe as describeStep } from '../src/pl';
 
 const world = generateWorld();
@@ -119,7 +120,7 @@ describe('evidence graph', () => {
     for (const text of ['Konta w sieci', 'Osoba, o którą pytano', 'Tylko zbieżność nazwiska, najwyżej 39%', 'Wykluczone: Binance: Hot Wallet 14', 'KartaKrypto']) expect(svg, text).toContain(text);
 
     const btc = g.nodes.find((n) => n.address === hero.wallets.find((w) => w.kind === 'btc-segwit')!.address)!;
-    const panel = renderToStaticMarkup(<Panel node={btc} graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
+    const panel = renderToStaticMarkup(<Detail node={btc} summary={summary} onClose={() => {}} />);
     for (const text of ['Wskaźnik Pewności', 'Synergia śladów', 'Razem', '100%', 'BitRozmowy', 'fakt źródłowy', 'wniosek do weryfikacji', 'Bramka płatnicza']) expect(panel, text).toContain(text);
 
     expect(panel).toContain('Adresy tej samej osoby: 6');
@@ -127,25 +128,36 @@ describe('evidence graph', () => {
     expect(svg).toContain('+5 adresów tej osoby');
     expect(svg).toContain('+1 adres tej osoby');
 
-    const estimate = renderToStaticMarkup(<Panel node={g.nodes.find((n) => n.type === 'estimate')} graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
+    const estimate = renderToStaticMarkup(<Detail node={g.nodes.find((n) => n.type === 'estimate')!} summary={summary} onClose={() => {}} />);
     for (const text of ['Do wyjaśnienia', 'zbycie prawdopodobne', '/A/NBP', 'art. 17 ust. 1f', 'Pominięto']) expect(estimate, text).toContain(text);
 
-    const exchange = renderToStaticMarkup(<Panel node={g.nodes.find((n) => n.title === 'BałtykEx')} graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
+    const exchange = renderToStaticMarkup(<Detail node={g.nodes.find((n) => n.title === 'BałtykEx')!} summary={summary} onClose={() => {}} />);
     for (const text of ['Kto zna tożsamość klienta', 'Adresat: BałtykEx', 'Podstawa prawna: [do uzupełnienia]', 'Kopiuj projekt zapytania']) expect(exchange, text).toContain(text);
 
-    const qr = renderToStaticMarkup(<Panel node={g.nodes.find((n) => n.address === hero.wallets.find((w) => w.label === 'sales')!.address)} graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
+    const qr = renderToStaticMarkup(<Detail node={g.nodes.find((n) => n.address === hero.wallets.find((w) => w.label === 'sales')!.address)!} summary={summary} onClose={() => {}} />);
     for (const text of ['Co może podważyć ten wynik', 'Odczytano go z kodu QR na tym zdjęciu', '/snapshots/', 'Adres odczytany z obrazu', 'Adres odczytany ze zdjęcia', 'Wpłata zgodna z ceną z ogłoszenia']) expect(qr, text).toContain(text);
-    const overview = renderToStaticMarkup(<Panel graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
-    for (const text of ['Znalezione przez łańcuch bloków', 'nocny_kantor', 'Kwoty zgodne z przelewami', '3 200 zł']) expect(overview, text).toContain(text);
+    // The case in scenario order: what was entered, the traces, the addresses with their scores, the blockchain.
+    const props: StepProps = {
+      summary, graph: g, layout: layoutGraph(g), events, cursor: events.length, runId: summary.runId, status: 'completed',
+      onSelect: () => {}, onRules: () => {}, onStep: () => {}, playback: { playing: false, setPlaying: () => {}, speed: 1, setSpeed: () => {}, setCursor: () => {}, atEnd: true },
+    };
+    const input = renderToStaticMarkup(<StepInput {...props} />);
+    for (const text of ['Co wprowadzono', 'szklane_domy', 'Parametry wyszukiwania', 'Głębokość poszukiwań', 'Reguły punktacji']) expect(input, text).toContain(text);
+    const traces = renderToStaticMarkup(<StepTraces {...props} />);
+    for (const text of ['Konta znalezione w sieci', 'nocny_kantor', 'który należy do tej samej osoby co adres', 'wynik najwyżej 39%', 'Krok ']) expect(traces, text).toContain(text);
+    const addresses = renderToStaticMarkup(<StepAddresses {...props} />);
+    for (const text of ['Kategoria powiązania', 'Jak wykryto', 'Rozstrzygnięcie', 'Przypisany osobie', 'Możliwe, że inna osoba', 'Odrzucony: adres oznaczonego podmiotu', 'kod QR na zdjęciu', 'ukryty przed automatami', 'podpis sprawdzony', 'własny profil']) expect(addresses, text).toContain(text);
+    const chain = renderToStaticMarkup(<StepChain {...props} />);
+    for (const text of ['Łączny wolumen otrzymany', 'Wyjście do walut tradycyjnych', 'Usługa wymiany P2P', 'Wymiana między kryptowalutami', 'Giełdy, na które trafiły środki', 'BałtykEx', 'zgodne z przelewami', '3 200 zł']) expect(chain, text).toContain(text);
     expect(svg).toContain('ten sam portfel');
     expect(svg).toContain('ten sam klient giełdy');
-    const profile = renderToStaticMarkup(<Panel node={g.nodes.find((n) => n.id === 'acc:bitrozmowy:szklane_domy')} graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
+    const profile = renderToStaticMarkup(<Detail node={g.nodes.find((n) => n.id === 'acc:bitrozmowy:szklane_domy')!} summary={summary} onClose={() => {}} />);
     for (const text of ['Profil w czasie', 'został na profilu zastąpiony adresem', 'Wersja profilu w czasie']) expect(profile, text).toContain(text);
     expect(svg).toContain('Potwierdzone podpisem');
     expect(svg).toContain('podmienił adres');
 
     const binance = g.nodes.find((n) => n.label === 'Binance: Hot Wallet 14')!;
-    const rejected = renderToStaticMarkup(<Panel node={binance} graph={g} summary={summary} events={events} cursor={events.length} onSelect={() => {}} />);
+    const rejected = renderToStaticMarkup(<Detail node={binance} summary={summary} onClose={() => {}} />);
     expect(rejected).toContain('class="stamp"');
     expect(rejected).toContain('(giełda; źródło: lista wbudowana OŁCyŚ v1)');
   });

@@ -31,8 +31,8 @@ export interface RunFacts {
    */
   nameFrequency?: Record<string, { first: string; last: string; firstCount: number; lastCount: number; expected: number; edition: string }>;
   /**
-   * A language model's opinion on whether an unconfirmed account belongs to the person. It never joins accounts;
-   * it moves the scores of that account's addresses a little, below the limit the identity sets.
+   * A language model's opinion on whether an unconfirmed account belongs to the person. It is shown on the
+   * receipt for the analyst and never changes a score or joins accounts.
    */
   opinions?: { origin: string; handle: string; verdict: 'same' | 'different' | 'unclear'; reasons: string[]; model: string }[];
   /** Value movements on the analysed wallets (`subject` is the published address of the wallet). */

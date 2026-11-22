@@ -22,23 +22,37 @@ const midNodes = await page.locator('svg.graph .node').count();
 if (out) await page.screenshot({ path: `${out}/live-1-running.png` });
 
 await page.click('text=4×');
-await page.waitForSelector('text=Analiza zakończona.', { timeout: 90000 });
+await page.waitForSelector('.overview-sum', { timeout: 90000 }); // the finished analysis lands on its overview
 await page.waitForTimeout(2500);
-const endNodes = await page.locator('svg.graph .node').count();
-const receipt = await page.locator('.receipt').count();
 if (out) await page.screenshot({ path: `${out}/live-2-finished.png` });
 
-// Keyboard: a node can be reached and opened without a mouse.
+// The path followed the analysis through its steps and ended on the short overview.
+const endStep = await page.locator('.path li.on .path-t').textContent();
+await page.click('.path >> text=Ślady w sieci');
+await page.waitForSelector('svg.graph .node-service');
+const endNodes = await page.locator('svg.graph .node').count();
+// Keyboard: a node of the graph can be reached and opened without a mouse.
 await page.locator('svg.graph .node-service').first().focus();
 await page.keyboard.press('Enter');
 await page.waitForTimeout(400);
 const serviceOpen = await page.locator('.side h2').first().textContent();
 
-await page.click('text=Raport');
-await page.waitForTimeout(500);
-if (out) await page.screenshot({ path: `${out}/live-3-report.png`, fullPage: false });
+// Step 3 of the scenario: every address with its score; a row opens the receipt.
+await page.click('.path >> text=Adresy i pewność');
+await page.waitForSelector('table.addresses tbody tr');
+const addressRows = await page.locator('table.addresses tbody tr').count();
+await page.locator('table.addresses tbody tr').first().click();
+await page.waitForTimeout(600);
+const receipt = await page.locator('.receipt').count();
+if (out) await page.screenshot({ path: `${out}/live-3-addresses.png` });
+
+// Step 6: the report.
+await page.click('.path >> text=Źródła i raport');
+await page.click('text=Pokaż raport');
+await page.waitForTimeout(800);
+if (out) await page.screenshot({ path: `${out}/live-4-report.png`, fullPage: false });
 const reportHeading = await page.frameLocator('.report-frame').locator('h1').first().textContent();
 
-console.log(JSON.stringify({ midNodes, endNodes, receipt, serviceOpen, reportHeading, errors }, null, 2));
+console.log(JSON.stringify({ midNodes, endNodes, endStep, addressRows, receipt, serviceOpen, reportHeading, errors }, null, 2));
 await browser.close();
-if (errors.length || !(midNodes > 1 && endNodes > midNodes && receipt === 1)) process.exit(1);
+if (errors.length || !(midNodes > 1 && endNodes > midNodes && endStep === 'Podsumowanie' && addressRows > 3 && receipt === 1 && reportHeading)) process.exit(1);

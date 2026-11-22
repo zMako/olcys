@@ -638,6 +638,7 @@ export async function beginRun(
       const labelled = labelsOf(chain);
       try {
         // Wallet expansion (W1): addresses that fund one transaction together are controlled by one party.
+        await emit({ type: 'progress', phase: 4, text: `Czytam historię przelewów adresu ${address.slice(0, 10)}…${address.slice(-6)}.` });
         const wallet: WalletMember[] = [{ address }];
         const members = new Set([address]);
         const transfers: Transfer[] = [];
@@ -676,6 +677,7 @@ export async function beginRun(
           const share = Math.ceil(params.maxCounterparties * 0.75);
           parties = [...new Set([...flagged.slice(0, params.maxCounterparties), ...recipients.slice(0, share), ...senders.slice(0, params.maxCounterparties - share)])];
         }
+        await emit({ type: 'progress', phase: 4, text: `Adres ${address.slice(0, 10)}…${address.slice(-6)}: ${transfers.length} przelewów. Sprawdzam, kim są kontrahenci (${parties.length}): giełda, kontrakt czy zwykły adres.` });
         await lookupAll(chain, parties);
 
         // One step further for unlabelled recipients: did the money go on to an exchange?
@@ -685,6 +687,7 @@ export async function beginRun(
         // An exchange gives a customer an ordinary address to deposit to, never a contract; contracts are not followed.
         const followable = [...byValue].filter(([x]) => known.get(`${chain}:${x}`)?.kind !== 'contract');
         const toFollow = followable.sort((p, q) => q[1] - p[1]).slice(0, params.maxHops).map(([x]) => x);
+        if (toFollow.length) await emit({ type: 'progress', phase: 4, text: `Sprawdzam ${toFollow.length} nieoznaczonych odbiorców adresu ${address.slice(0, 10)}…${address.slice(-6)}: czy przekazali środki dalej na giełdę.` });
         // Histories are independent of each other, so a few are read at a time.
         const histories = new Map<string, Transfer[]>();
         for (let i = 0; i < toFollow.length; i += 3) {
@@ -754,6 +757,7 @@ export async function beginRun(
   const attested = new Set<string>();
   const attestationStage = async (a: Assessment) => {
     const firm = new Set(firmClusters(a).map((c) => c.id));
+    if (a.links.some((l) => l.status === 'attributed')) await emit({ type: 'progress', phase: 3, text: 'Sprawdzam, co o adresach publicznie poświadczają giełdy i inne instytucje.' });
     for (const l of a.links) {
       const key = `${l.chain}:${l.address}`;
       if (l.status !== 'attributed' || !firm.has(l.clusterId) || attested.has(key)) continue;
@@ -875,6 +879,7 @@ export async function beginRun(
       const root = walletOf.get(l.address) ?? l.address;
       best.set(root, Math.max(best.get(root) ?? 0, l.score));
     }
+    await emit({ type: 'progress', phase: 5, text: 'Wyceniam przelewy do usług wyjścia: kurs aktywa z dnia przelewu i kurs średni NBP.' });
     const valued: ValuedTransfer[] = [];
     const included: Estimate['addresses'] = [];
     const leftOut: Estimate['leftOut'] = [];

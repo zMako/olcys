@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>OŁCyŚ — prezentacja</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource/brygada-1918/600.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/brygada-1918/700.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/lato/400.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/lato/700.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/lato/900.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/500.css">
+<style>
+  @page { size: 1920px 1080px; margin: 0; }
+  :root { --ink: #0f1b2d; --ink2: #3f4e66; --ink3: #5c6b82; --line: #d6dce5; --stamp: #4336b0; --soft: #efedfb; --paper: #edf0f4; --good: #0f6b2f; --bad: #a8271f; --warn: #f0a91b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 30px/1.4 'Lato', sans-serif; color: var(--ink); }
+  .slide { position: relative; width: 1920px; height: 1080px; padding: 78px 96px 70px; background: #fff; page-break-after: always; overflow: hidden; }
+  .slide.dark { background: var(--ink); color: #fff; }
+  h1 { margin: 0 0 18px; font: 700 68px/1.08 'Brygada 1918', serif; }
+  h2 { margin: 0 0 12px; font: 700 54px/1.1 'Brygada 1918', serif; }
+  .lede { max-width: 1500px; margin: 0 0 30px; font-size: 32px; color: var(--ink2); }
+  .dark .lede { color: #c5cfe2; }
+  .pg { position: absolute; right: 96px; bottom: 44px; font: 500 20px 'IBM Plex Mono', monospace; color: var(--ink3); }
+  .crit { position: absolute; left: 96px; bottom: 40px; padding: 6px 16px; border-left: 5px solid var(--stamp); background: var(--soft); font-size: 22px; color: var(--ink); }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
+  .cols.wide-right { grid-template-columns: 0.82fr 1.18fr; }
+  .shot { width: 100%; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 14px 34px rgba(15, 27, 45, 0.16); }
+  ul { margin: 0; padding-left: 30px; } li { margin: 0 0 14px; }
+  .big { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 40px; margin: 34px 0 0; border-top: 3px solid currentColor; }
+  .big div { padding: 18px 0 0; } .big b { display: block; font: 900 76px/1 'Lato'; font-variant-numeric: tabular-nums; } .big span { font-size: 24px; color: var(--ink3); }
+  .dark .big span { color: #a9b6cb; }
+  table { border-collapse: collapse; width: 100%; font-size: 26px; } th { text-align: left; font-size: 21px; color: var(--ink2); border-bottom: 3px solid var(--ink); padding: 8px 18px 8px 0; }
+  td { padding: 11px 18px 11px 0; border-bottom: 1px solid var(--line); vertical-align: top; } td.n { font: 900 28px 'Lato'; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .path { display: grid; grid-template-columns: repeat(6, 1fr); margin: 34px 0 26px; }
+  .path div { position: relative; padding-right: 20px; } .path div::before { content: ''; position: absolute; top: 26px; left: 0; right: 0; height: 4px; background: var(--stamp); }
+  .path i { position: relative; display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 12px; border-radius: 50%; background: var(--stamp); color: #fff; font: 500 26px 'IBM Plex Mono'; font-style: normal; }
+  .path b { display: block; font-size: 28px; } .path span { font-size: 21px; color: var(--ink3); line-height: 1.3; display: block; }
+  .band { display: grid; grid-template-columns: 170px 1fr; gap: 0 22px; font-size: 25px; } .band b { padding: 9px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; } .band span { padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .tag { display: inline-block; padding: 2px 14px; border-radius: 999px; font-size: 22px; font-weight: 700; }
+  .tag.yes { background: #e3f3e7; color: var(--good); } .tag.bad { background: #fbe6e4; color: var(--bad); }
+  .mono { font-family: 'IBM Plex Mono', monospace; font-size: 0.88em; }
+  .small { font-size: 22px; color: var(--ink3); }
+</style>
+</head>
+<body>
+
+<section class="slide dark">
+  <p style="margin:0 0 26px;font:italic 600 30px 'Brygada 1918';color:#a9b6cb">Osintowy Łapacz Cyfrowych Śladów · HackNation 2026 · wyzwanie KAS</p>
+  <h1 style="font-size:104px;max-width:1500px">OŁCyŚ: od jednego identyfikatora do adresu, pewności i kwoty</h1>
+  <p class="lede">Narzędzie OSINT dla analityka KAS. Samo przeszukuje publiczne źródła, łączy ślady z adresami kryptowalut, liczy prawdopodobieństwo każdego powiązania, odrzuca fałszywe trafienia i pokazuje, dokąd trafiły środki.</p>
+  <div class="big">
+    <div><b>4 500</b><span>polskich portfeli w rejestrze zbudowanym z danych publicznych</span></div>
+    <div><b>818</b><span>z nich wysłało środki na giełdy</span></div>
+    <div><b>100%</b><span>wyniku liczą jawne reguły, bez udziału modelu AI</span></div>
+    <div><b>220</b><span>testów automatycznych, w tym scenariusze akceptacyjne</span></div>
+  </div>
+  <span class="pg" style="color:#a9b6cb">1 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Problem: nie wiadomo, od kogo zacząć, a każdą nitkę ciągnie się ręcznie</h2>
+  <p class="lede">Adresy portfeli leżą w profilach, ogłoszeniach i na forach. Połączenie ich z osobą i z historią w łańcuchu bloków to dziś godziny ręcznej pracy, której nie da się powtórzyć ani sprawdzić.</p>
+  <div class="cols">
+    <div>
+      <p style="margin:0 0 12px;font-weight:700">Co zmierzyliśmy sami, wyłącznie na danych publicznych</p>
+      <table>
+        <tr><td class="n">3 876</td><td>portfeli, o których giełda Coinbase publicznie poświadcza: „klient zweryfikowany w Polsce”</td></tr>
+        <tr><td class="n">3 014</td><td>portfeli rejestru z historią w sieci Base</td></tr>
+        <tr><td class="n">818</td><td>wysłało środki na giełdy: 5 327 wpłat</td></tr>
+        <tr><td class="n">1,83 mln</td><td>w stablecoinach (USDC, USDT, DAI) oraz 520 ETH trafiło na adresy giełd</td></tr>
+      </table>
+    </div>
+    <div>
+      <p style="margin:0 0 12px;font-weight:700">Czego brakuje analitykowi</p>
+      <ul>
+        <li><b>Punktu wyjścia:</b> listy portfeli, które warto sprawdzić.</li>
+        <li><b>Miary pewności:</b> czy adres na pewno należy do tej osoby, czy tylko ją przypomina.</li>
+        <li><b>Ochrony przed pomyłką:</b> adres giełdy albo kontraktu to nie portfel osoby.</li>
+        <li><b>Dowodu:</b> źródła, daty i możliwości odtworzenia każdego kroku.</li>
+      </ul>
+    </div>
+  </div>
+  <span class="pg">2 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Rozwiązanie: sprawa czytana w kolejności scenariusza</h2>
+  <div class="path">
+    <div><i>1</i><b>Wejście</b><span>nick, nazwisko, e-mail, komunikator, adres; parametry i źródła</span></div>
+    <div><i>2</i><b>Ślady w sieci</b><span>konta, profile, ogłoszenia; przebieg do odtworzenia</span></div>
+    <div><i>3</i><b>Adresy i pewność</b><span>wykrycie, weryfikacja, Wskaźnik Pewności, odrzucenia</span></div>
+    <div><i>4</i><b>Łańcuch bloków</b><span>wolumen, wymiana, wyjście do fiat, P2P</span></div>
+    <div><i>5</i><b>Wniosek</b><span>wartość do wyjaśnienia, kto zna właściciela, projekty zapytań</span></div>
+    <div><i>6</i><b>Źródła i raport</b><span>magazyn dowodów, raport PDF, dziennik</span></div>
+  </div>
+  <div class="cols wide-right">
+    <ul>
+      <li>Silnik chodzi w rundach: z sieci do łańcucha bloków i z powrotem, bo portfel wskazuje kolejne konta.</li>
+      <li>Każdy krok jest zapisany z czasem. Analityk widzi dziennik: „adres przypisany, podstawa…”, „adres odrzucony, bo…”.</li>
+      <li>Analizy można powtarzać cyklicznie; wynik jest zapisywany i porównywany z poprzednim.</li>
+      <li>Nowe źródło to jedna implementacja interfejsu; nowa sieć to jeden kodek adresów.</li>
+    </ul>
+    <img class="shot" src="img/krok-2-slady.png" alt="Graf powiązań: od identyfikatora, przez konta i adresy, do usług">
+  </div>
+  <span class="crit">Kryterium 1 (25%): pełny scenariusz, wszystkie etapy</span><span class="pg">3 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Wskaźnik Pewności: prawdopodobieństwo liczone jawnymi regułami</h2>
+  <div class="cols wide-right">
+    <div>
+      <div class="band">
+        <b>80–100%</b><span>bardzo wysokie: własny profil, strona, repozytorium</span>
+        <b>60–79%</b><span>prawdopodobne: ogłoszenie sprzedaży, rozliczenie</span>
+        <b>40–59%</b><span>średnie: wpis w dyskusji na forum</span>
+        <b>1–39%</b><span>niskie, szum: masowe komentarze, konkursy</span>
+        <b>0%</b><span>wykluczone: giełda, kontrakt, mikser, zbiórka</span>
+      </div>
+      <ul style="margin-top:26px">
+        <li><b>+15 pkt proc.</b> za ten sam adres w dwóch niezależnych serwisach; powtórzenia w jednym się nie liczą.</li>
+        <li><b>100%</b> tylko za podpis kluczem adresu, sprawdzony matematycznie przez narzędzie.</li>
+        <li><b>Limit tożsamości:</b> wynik adresu nie przekroczy pewności, że konto należy do osoby.</li>
+        <li>Każdy wynik to <b>paragon</b>: reguła, punkty, źródła, suma.</li>
+      </ul>
+    </div>
+    <img class="shot" src="img/krok-3-adresy.png" alt="Tabela adresów z wynikiem i paragon wyliczenia">
+  </div>
+  <span class="crit">Kryterium 2 (25%): jakość i przejrzystość algorytmu punktacji</span><span class="pg">4 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Fałszywe trafienia: odrzucone, przekreślone, z powodem</h2>
+  <div class="cols wide-right">
+    <div>
+      <table>
+        <tr><th>Reguła</th><th>Kiedy adres dostaje 0%</th></tr>
+        <tr><td class="n">X1</td><td>ma publiczną etykietę: giełda, P2P, bramka, kantor, token, mikser, zbiórka, most</td></tr>
+        <tr><td class="n">X2</td><td>pod adresem jest kod wykonywalny (smart kontrakt)</td></tr>
+        <tr><td class="n">X3</td><td>publikują go 3 lub więcej niepowiązanych kont</td></tr>
+        <tr><td class="n">Q1</td><td>występuje tylko w cytacie cudzej wypowiedzi</td></tr>
+      </table>
+      <ul style="margin-top:24px">
+        <li>Fakt przelewu do giełdy jest odnotowany, ale adres nie jest przypisany osobie.</li>
+        <li>„Jan Kowalski” to ok. 1 440 osób w rejestrze PESEL: dopasowanie po samym nazwisku ma limit 15%.</li>
+        <li>Token, który tylko nazywa się „USDC”, i tokeny-reklamy z podrobionym nadawcą nie wchodzą do wyniku.</li>
+      </ul>
+    </div>
+    <img class="shot" src="img/krok-3-odrzucone.png" alt="Odrzucony adres z paragonem i powodem wykluczenia">
+  </div>
+  <span class="crit">Kryterium 2 (25%): skuteczność odrzucania giełd, kontraktów i innych fałszywych trafień</span><span class="pg">5 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Rejestr: gotowa lista spraw, zanim ktokolwiek poda nazwisko</h2>
+  <div class="cols wide-right">
+    <div>
+      <ul>
+        <li><b>4 500 portfeli</b> z publicznych źródeł: poświadczenia giełd o klientach zweryfikowanych w Polsce i konta, które same podpisały swoje portfele.</li>
+        <li>Na górze portfele, które <b>wysłały najwięcej na giełdy</b>.</li>
+        <li><b>275 portfeli</b> poświadczają dwie giełdy naraz: Coinbase i Binance.</li>
+        <li>Jedno kliknięcie zamienia wiersz w sprawę z pełną analizą.</li>
+        <li>Dane osobowe są zakryte do chwili odkrycia przez analityka.</li>
+      </ul>
+      <p class="small" style="margin-top:22px">Rejestr powstał wyłącznie z danych publicznych, bez logowania i bez obchodzenia zabezpieczeń, i nie opuszcza maszyny.</p>
+    </div>
+    <img class="shot" src="img/register.png" alt="Rejestr polskich portfeli: lista z poświadczeniami i giełdami">
+  </div>
+  <span class="crit">Kryterium 4 (15%): rozwiązanie ponad wymagane minimum</span><span class="pg">6 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Przypadek 1: portfel z poświadczeniem giełdy</h2>
+  <div class="cols wide-right">
+    <div>
+      <table>
+        <tr><td class="n">1 nick</td><td>na wejściu; 4 konta o tym nicku, 2 podobne konta trzymane osobno jako niepotwierdzone</td></tr>
+        <tr><td class="n">100%</td><td>dwa portfele potwierdzone podpisem, trzeci 95%</td></tr>
+        <tr><td class="n">PL</td><td>Coinbase publicznie poświadcza: klient zweryfikowany w Polsce</td></tr>
+        <tr><td class="n">21</td><td>wpłat na Binance, Bybit i OKX przez rozpoznane adresy depozytowe</td></tr>
+        <tr><td class="n">287 284 zł</td><td>wartość do wyjaśnienia za lata 2024–2026</td></tr>
+      </table>
+      <p style="margin-top:22px">Narzędzie nie wskazuje osoby z imienia. Wskazuje, <b>kto ją zna</b>, i przygotowuje projekt zapytania z dokładnym wykazem wpłat.</p>
+    </div>
+    <img class="shot" src="img/kyc-summary.png" alt="Podsumowanie sprawy z wartością do wyjaśnienia">
+  </div>
+  <span class="crit">Kryterium 1 (25%): poprawność wyników na prawdziwych, publicznych danych</span><span class="pg">7 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Przypadek 2: portfel bez żadnej weryfikacji na giełdzie</h2>
+  <div class="cols wide-right">
+    <div>
+      <p style="margin:0 0 16px"><span class="tag bad">brak jakiegokolwiek poświadczenia KYC</span></p>
+      <table>
+        <tr><td class="n">1 konto</td><td>publiczne, które samo dołączyło portfel</td></tr>
+        <tr><td class="n">100%</td><td>portfel podpisał oświadczenie „należę do tego konta”; podpis sprawdziliśmy sami</td></tr>
+        <tr><td class="n">13</td><td>wpłat na Bybit i MEXC; adresy depozytowe rozpoznane po przepływie środków, bez żadnej etykiety</td></tr>
+        <tr><td class="n">97 497 zł</td><td>wartość do wyjaśnienia; 90 034 zł w samym 2024 r.</td></tr>
+      </table>
+      <p style="margin-top:22px">Bez KYC po stronie portfela analiza i tak dochodzi do podmiotu, który <b>zna klienta</b>: giełda przydziela adres depozytowy jednej, zweryfikowanej osobie.</p>
+    </div>
+    <img class="shot" src="img/nokyc-addresses.png" alt="Adres potwierdzony podpisem: paragon z wynikiem 100%">
+  </div>
+  <span class="crit">Kryterium 1 i 2: powiązanie i pewność bez pomocy giełdy</span><span class="pg">8 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Raport, źródła i odtwarzalność</h2>
+  <div class="cols wide-right">
+    <ul>
+      <li><b>Trzy rodzaje stwierdzeń</b> oznaczone przy każdym bloku: fakt źródłowy, wynik obliczeń, wniosek do weryfikacji.</li>
+      <li><b>Magazyn dowodów:</b> każda pobrana strona z adresem, czasem i skrótem SHA-256; zapisy łączy łańcuch skrótów.</li>
+      <li><b>Raport PDF</b> w kolejności scenariusza, z chronologią przepływu środków i słowniczkiem dla osób bez wiedzy informatycznej.</li>
+      <li><b>Dziennik czynności</b> analityka, też w łańcuchu skrótów.</li>
+      <li><b>Czego nie udało się odczytać</b> jest wypisane: wynik niepełny mówi, że jest niepełny.</li>
+      <li><b>Model językowy (Bielik, lokalnie)</b> tylko pomaga czytać i pisać projekty. Każde jego zdanie musi wskazać ustalenia; liczby i adresy sprawdza program.</li>
+    </ul>
+    <img class="shot" src="img/krok-6-zrodla.png" alt="Magazyn dowodów: zapisy z adresem, czasem i skrótem treści">
+  </div>
+  <span class="crit">Kryterium 3 (20%): przejrzystość raportu, kompletność źródeł, odtwarzalność</span><span class="pg">9 / 10</span>
+</section>
+
+<section class="slide">
+  <h2>Kryteria oceny i gdzie w rozwiązaniu jest odpowiedź</h2>
+  <table style="font-size:31px">
+    <tr><th>Kryterium</th><th>Waga</th><th>Odpowiedź</th></tr>
+    <tr><td><b>Zgodność z wyzwaniem i scenariusz</b></td><td class="n">25%</td><td>Sześć kroków w kolejności scenariusza; wszystkie wymagane identyfikatory; analizy cykliczne z porównaniem; scenariusze testowe na danych syntetycznych i dwa przypadki na danych publicznych.</td></tr>
+    <tr><td><b>Wskaźnik Pewności i błędne przypisania</b></td><td class="n">25%</td><td>Pasma i premie zgodne z załącznikiem; paragon przy każdym adresie; reguły na jednej stronie, zmienialne i wersjonowane; cztery reguły wykluczeń i limit tożsamości.</td></tr>
+    <tr><td><b>Raport, źródła, uzasadnienie</b></td><td class="n">20%</td><td>Fakty, obliczenia i wnioski rozdzielone; adres URL, czas i skrót każdego źródła; chronologia przepływów; raport czytelny bez wiedzy informatycznej.</td></tr>
+    <tr><td><b>Pomysł i oryginalność</b></td><td class="n">15%</td><td>Rejestr 4 500 portfeli; podpisy sprawdzane przez narzędzie; publiczne poświadczenia giełd; adresy depozytowe rozpoznawane po przepływie; rytm doby; twórca kontraktu.</td></tr>
+    <tr><td><b>Wdrożenie i architektura</b></td><td class="n">15%</td><td>Node.js, React, PostgreSQL, jedno repozytorium; działa lokalnie, bez chmury; lista dozwolonych hostów; model AI lokalny i wymienny jedną zmienną; komponenty wyłącznie Open Source.</td></tr>
+  </table>
+  <p class="small" style="margin-top:30px;font-size:26px">Wynik liczą wyłącznie reguły: te same źródła dają zawsze ten sam wynik. Dane testowe i wyniki nie trafiają do usług zewnętrznych.</p>
+  <span class="pg">10 / 10</span>
+</section>
+
+</body>
+</html>

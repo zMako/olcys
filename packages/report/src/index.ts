@@ -41,7 +41,7 @@ const LEVEL: Record<string, string> = {
 export const AUDIT_PL: Record<string, string> = {
   'analysis.started': 'uruchomiono analizę', 'analysis.repeated': 'powtórzono analizę', 'analysis.scheduled': 'analiza z harmonogramu', 'schedule.set': 'ustawiono harmonogram',
   'schedule.cleared': 'wyłączono harmonogram', 'report.viewed': 'otwarto raport', 'report.exported': 'pobrano raport (PDF)', 'posts.read': 'model językowy przeczytał wpisy',
-  'case.described': 'model językowy opracował sprawę', 'register.viewed': 'otwarto rejestr portfeli', 'run.rescored': 'przeliczono wynik według zmienionych reguł',
+  'case.described': 'model językowy opracował sprawę', 'register.viewed': 'otwarto rejestr portfeli', 'case.status': 'zmieniono stan sprawy', 'case.deleted': 'usunięto sprawę', 'rules.changed': 'zmieniono reguły punktacji', 'rules.reset': 'przywrócono domyślne reguły punktacji', 'run.rescored': 'przeliczono wynik według zmienionych reguł',
 };
 const PLACEMENT: Record<string, string> = {
   own_profile: 'własny profil', sale: 'ogłoszenie', discussion: 'dyskusja na forum', mass_comment: 'masowe komentarze', quoted: 'cytat cudzej wypowiedzi',
@@ -163,6 +163,8 @@ export function renderReport(input: ReportInput): string {
 <p>${tag('W')} — przypuszczenie, które wskazuje, co warto sprawdzić. Nie jest ustaleniem.</p>
 </div>`);
 
+  // The report follows the order of the analysis: what was entered, the traces on the web, the addresses and their
+  // scores, the rejected ones, the blockchain, the conclusion, and the evidence behind all of it.
   // ---- 1. summary
   out.push(h2(++n, 'Podsumowanie'));
   out.push(`<div class="figures">
@@ -173,7 +175,7 @@ export function renderReport(input: ReportInput): string {
   const strongest = attributed.slice(0, 4).map((l) => `<span class="mono">${esc(short(l.address))}</span> (${CHAIN[l.chain] ?? l.chain}, ${l.score}%)`);
   out.push(`<p>${tag('O')} ${attributed.length ? `Z osobą powiązano ${attributed.length} ${attributed.length === 1 ? 'adres kryptowalutowy' : 'adresy kryptowalutowe'}. Najsilniejsze powiązania: ${strongest.join(', ')}.` : 'Nie znaleziono adresów, które można powiązać z osobą.'}</p>`);
   if (rejected.length) out.push(`<p>${tag('O')} Odrzucono ${rejected.length} przypisań: adresy giełd, kontraktów i innych podmiotów oraz adresy cudze, które osoba jedynie zacytowała.</p>`);
-  if (exchanges.length) out.push(`<p>${tag('W')} Środki trafiały na giełdę: <b>${exchanges.map(esc).join(', ')}</b>. Giełda zna tożsamość klienta, do którego należy adres depozytowy — projekt zapytania znajduje się w części „Projekt zapytania do giełdy”.</p>`);
+  if (exchanges.length) out.push(`<p>${tag('W')} Środki trafiały na giełdę: <b>${exchanges.map(esc).join(', ')}</b>. Giełda zna tożsamość klienta, do którego należy adres depozytowy — projekt zapytania znajduje się w części „Projekty zapytań”.</p>`);
   if (e?.years.length) {
     out.push(`<p>${tag('W')} Szacunkowa wartość środków skierowanych do usług, w których kryptowaluta może zostać zamieniona na walutę tradycyjną:</p>`);
     out.push(table(['Rok', '<span class="r">Zbycie prawdopodobne</span>', '<span class="r">Zbycie możliwe</span>', '<span class="r">Razem</span>'],
@@ -181,6 +183,15 @@ export function renderReport(input: ReportInput): string {
     out.push('<p class="small">To potencjalny przychód do wyjaśnienia, a nie dochód: nie uwzględnia kosztów nabycia i wymaga potwierdzenia u wskazanych podmiotów.</p>');
   }
   out.push(`<p>${tag('F')} Ustalenia opierają się na ${s.counts.snapshots} zapisanych stronach i odpowiedziach eksploratora łańcucha bloków. ${input.verification.ok ? 'Magazyn dowodów jest nienaruszony: zgadzają się wszystkie skróty treści i cały łańcuch skrótów.' : `Uwaga: magazyn dowodów jest naruszony w zapisach nr ${input.verification.broken.join(', ')}.`}</p>`);
+
+  // ---- input and search parameters
+  out.push(h2(++n, 'Wejście i parametry wyszukiwania', 'F'));
+  out.push(`<p><b>Wprowadzono.</b> ${input.seeds.map((x) => `${KIND[x.kind] ?? x.kind} „${esc(x.value)}”`).join(', ')}.</p>`);
+  const p = s.params;
+  out.push(`<p><b>Parametry wyszukiwania.</b> Głębokość podążania za tropami: ${p.maxDepth}. Sprawdzanie, kto jeszcze podał znalezione adresy: ${p.pivotOnAddresses ? 'tak' : 'nie'}. Najwyżej ${p.maxIdentifiers} tropów, ${p.maxChainAddresses} adresów analizowanych w łańcuchu bloków. Sprawdzono ${s.identifiers.length} tropów:</p>`);
+  out.push(`<ul>${s.identifiers.filter((i) => i.kind !== 'crypto_address').map((i) => `<li>${KIND[i.kind] ?? i.kind}: ${esc(i.value)}${i.origin === 'seed' ? ' (wprowadzony)' : ''}</li>`).join('')}</ul>`);
+  out.push(`<p><b>Wykorzystane źródła.</b></p>${table(['Źródło', 'Adres'], input.sources.map((x) => [esc(x.name), x.hosts.map(esc).join(', ')]))}`);
+  out.push(`<p>Połączenia z adresami spoza listy dozwolonych źródeł: ${s.counts.denied === 0 ? 'żadnego' : `${s.counts.denied} zablokowanych`}.</p>`);
 
   // ---- changes since the previous analysis
   if (input.diff) {
@@ -216,13 +227,19 @@ export function renderReport(input: ReportInput): string {
     }
   }
 
-  // ---- audit trail
-  if (input.audit?.length) {
-    out.push(h2(++n, 'Dziennik czynności w sprawie', 'F'));
-    out.push('<p>Każda czynność w narzędziu jest zapisywana z czasem i wykonawcą. Wpisy są połączone łańcuchem skrótów: zmiana lub usunięcie wpisu unieważnia wszystkie późniejsze.</p>');
-    out.push(table(['Czas (UTC)', 'Kto', 'Czynność', 'Skrót wpisu'], [...input.audit].reverse().map((e) => [
-      minute(e.at), esc(e.actor), `${esc(AUDIT_PL[e.action] ?? e.action)}${e.runId ? `<br><span class="small">analiza <code>${esc(e.runId.slice(0, 8))}</code></span>` : ''}`, `<span class="mono hash">${esc(e.hash.slice(0, 16))}…</span>`,
-    ])));
+  // ---- profiles over time
+  const histories = (a?.histories ?? []).filter((h) => h.changes.length);
+  if (histories.length) {
+    out.push(h2(++n, 'Zmiany na profilach w czasie', 'F'));
+    out.push('<p>Porównano obecny profil z jego wersjami zapisanymi w archiwum stron.</p>');
+    for (const h of histories) {
+      out.push(`<h3>${esc(h.handle)}, ${esc(h.source)}</h3>`);
+      out.push(table(['Data wersji', 'Skąd', 'Adresy na profilu'], h.versions.map((v) => [
+        v.at.slice(0, 10), v.source === 'live' ? 'profil pobrany podczas analizy' : `<a href="${esc(v.url)}">kopia w archiwum</a>`,
+        v.addresses.map((x) => `<span class="mono">${esc(x.address)}</span>`).join('<br>') || '—',
+      ])));
+      out.push(`<ul>${h.changes.map((c) => `<li>${esc(c.detail)}</li>`).join('')}</ul>`);
+    }
   }
 
   // ---- what the person wrote about their own crypto
@@ -241,42 +258,6 @@ export function renderReport(input: ReportInput): string {
     } else out.push('<p>Żaden wpis nie wygląda na wypowiedź o własnych kryptowalutach.</p>');
     out.push('<p class="small">Wypowiedź jest wskazówką, gdzie szukać, a nie dowodem transakcji. Nie wpływa na Wskaźnik Pewności.</p>');
   }
-  if (s.dossier?.sentences.length) {
-    const d = s.dossier;
-    const cited = new Set(d.sentences.flatMap((x) => x.cites));
-    out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
-    out.push(`<div class="notice">${d.sentences.map((x) => `${esc(x.text)} <span class="small mono">[${x.cites.map(esc).join(', ')}]</span>`).join(' ')}</div>`);
-    out.push(`<p class="small">Opis napisał model ${esc(d.model)} działający na tej maszynie (${minute(d.createdAt)} UTC). Dostał wyłącznie ponumerowane ustalenia tej analizy. Każde zdanie wskazuje ustalenia, na których się opiera, a program sprawdził, że wskazane ustalenia istnieją i że każda liczba i każdy adres w zdaniu z nich pochodzi. ${d.rejected.length ? `Kontrola odrzuciła ${d.rejected.length} ${d.rejected.length === 1 ? 'zdanie' : 'zdań'} modelu; są wymienione niżej.` : 'Kontrola nie odrzuciła żadnego zdania.'}</p>`);
-    out.push(table(['Nr', 'Warstwa', 'Ustalenie', 'Gdzie sprawdzić'], d.findings.filter((f) => cited.has(f.id)).map((f) => [
-      `<span class="mono">${esc(f.id)}</span>`, f.layer === 'fact' ? 'fakt źródłowy' : f.layer === 'computed' ? 'wynik obliczony' : 'wniosek do weryfikacji', esc(f.text), f.source ? `<span class="small">${esc(f.source)}</span>` : '<span class="small">ustalenie tej analizy</span>',
-    ])));
-    if (d.rejected.length) out.push(`<p class="small">Zdania odrzucone przez kontrolę (nie są częścią opisu): ${d.rejected.map((r) => `„${esc(r.text)}” — ${esc(r.reason)}`).join('; ')}.</p>`);
-  } else if (s.narrative) {
-    out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
-    out.push(`<div class="notice">${esc(s.narrative.text).replace(/\n+/g, '<br>')}</div>`);
-    out.push(`<p class="small">Tekst wygenerował model ${esc(s.narrative.model)} działający na tej maszynie, wyłącznie z ustaleń zawartych w tym raporcie (${minute(s.narrative.createdAt)} UTC). Może zawierać błędy; rozstrzygają ustalenia i źródła, nie ten opis.</p>`);
-  }
-  if (s.triage?.leads.length) {
-    out.push(h2(++n, 'Dalsze czynności', 'W'));
-    out.push(`<p>Lista wynika z ustaleń według stałych reguł. ${s.triage.byModel ? `Kolejność i uzasadnienia zaproponował model ${esc(s.triage.model)}; nie może on dodać czynności spoza listy.` : 'Kolejność wynika z reguł.'}</p>`);
-    out.push(table(['Lp.', 'Czynność', 'Dlaczego teraz'], s.triage.leads.map((l, i) => [String(i + 1), esc(l.text), l.reason ? esc(l.reason) : '<span class="small">—</span>'])));
-  }
-
-  // ---- profiles over time
-  const histories = (a?.histories ?? []).filter((h) => h.changes.length);
-  if (histories.length) {
-    out.push(h2(++n, 'Zmiany na profilach w czasie', 'F'));
-    out.push('<p>Porównano obecny profil z jego wersjami zapisanymi w archiwum stron.</p>');
-    for (const h of histories) {
-      out.push(`<h3>${esc(h.handle)}, ${esc(h.source)}</h3>`);
-      out.push(table(['Data wersji', 'Skąd', 'Adresy na profilu'], h.versions.map((v) => [
-        v.at.slice(0, 10), v.source === 'live' ? 'profil pobrany podczas analizy' : `<a href="${esc(v.url)}">kopia w archiwum</a>`,
-        v.addresses.map((x) => `<span class="mono">${esc(x.address)}</span>`).join('<br>') || '—',
-      ])));
-      out.push(`<ul>${h.changes.map((c) => `<li>${esc(c.detail)}</li>`).join('')}</ul>`);
-    }
-  }
-
   // ---- 3. attributed addresses
   out.push(h2(++n, 'Adresy powiązane z osobą'));
   if (!attributed.length) out.push('<p>Brak.</p>');
@@ -330,26 +311,6 @@ export function renderReport(input: ReportInput): string {
       : `<p>${tag('W')} Nie wykryto przelewów do giełd, usług P2P, bramek płatniczych, kart ani kantorów.</p>`);
   }
 
-  // ---- 6. estimate
-  if (e) {
-    out.push(h2(++n, 'Szacunek wartości w złotych', 'W'));
-    for (const y of e.years) {
-      out.push(`<h3>Rok ${y.year}: ${esc(formatPln(y.totalPln))}</h3>`);
-      out.push(table(['Rodzaj usługi', 'Ocena', '<span class="r">Przelewów</span>', '<span class="r">Wartość</span>'], y.channels.map((c) => [esc(c.title), CERTAINTY[c.certainty], String(c.count), esc(formatPln(c.pln))])));
-    }
-    out.push(`<p><b>Metoda.</b></p><ul>${e.method.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>`);
-    if (e.leftOut.length) out.push(`<p>Adresy pominięte w szacunku: ${e.leftOut.map((x) => `<span class="mono">${esc(short(x.address))}</span> (${x.score}%, ${esc(x.reason)})`).join('; ')}.</p>`);
-    out.push('<p>Przelewy objęte szacunkiem:</p>');
-    out.push(table(['Data', 'Usługa', 'Ilość', '<span class="r">Kurs USD</span>', 'Kurs NBP', '<span class="r">Wartość</span>'], e.transfers.map((t) => [
-      t.day,
-      `${esc(t.counterparty ?? short(t.to))}<br><span class="small">${CERTAINTY[t.certainty]}</span>`,
-      `${esc(formatAmount(t.amount))} ${esc(t.asset)}`,
-      t.priceUsd !== undefined ? num(t.priceUsd) : '—',
-      t.rate ? `${num(t.rate.mid, 4)}<br><span class="small">tab. ${esc(t.rate.table)} z ${t.rate.effectiveDate}</span>` : '—',
-      t.valuePln !== undefined ? `<b>${esc(formatPln(t.valuePln))}</b>` : esc(t.note ?? '—'),
-    ])));
-  }
-
   // ---- 7. chronology
   out.push(h2(++n, 'Chronologiczny przebieg przepływu środków', 'F'));
   const wallets = s.chain.activity.map((w) => ({ root: w.address, members: new Set(w.wallet.map((m) => m.address)) }));
@@ -372,6 +333,26 @@ export function renderReport(input: ReportInput): string {
     ? `<p>Wszystkie przelewy analizowanych portfeli w kolejności czasowej (czas UTC).</p>${table(['Data', 'Portfel', 'Zdarzenie', '<span class="r">Kwota</span>', 'Transakcja'], rows.slice(0, 400))}${rows.length > 400 ? `<p class="small">Pokazano pierwsze 400 z ${rows.length} przelewów.</p>` : ''}`
     : '<p>Brak przelewów.</p>');
 
+  // ---- 6. estimate
+  if (e) {
+    out.push(h2(++n, 'Szacunek wartości w złotych', 'W'));
+    for (const y of e.years) {
+      out.push(`<h3>Rok ${y.year}: ${esc(formatPln(y.totalPln))}</h3>`);
+      out.push(table(['Rodzaj usługi', 'Ocena', '<span class="r">Przelewów</span>', '<span class="r">Wartość</span>'], y.channels.map((c) => [esc(c.title), CERTAINTY[c.certainty], String(c.count), esc(formatPln(c.pln))])));
+    }
+    out.push(`<p><b>Metoda.</b></p><ul>${e.method.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>`);
+    if (e.leftOut.length) out.push(`<p>Adresy pominięte w szacunku: ${e.leftOut.map((x) => `<span class="mono">${esc(short(x.address))}</span> (${x.score}%, ${esc(x.reason)})`).join('; ')}.</p>`);
+    out.push('<p>Przelewy objęte szacunkiem:</p>');
+    out.push(table(['Data', 'Usługa', 'Ilość', '<span class="r">Kurs USD</span>', 'Kurs NBP', '<span class="r">Wartość</span>'], e.transfers.map((t) => [
+      t.day,
+      `${esc(t.counterparty ?? short(t.to))}<br><span class="small">${CERTAINTY[t.certainty]}</span>`,
+      `${esc(formatAmount(t.amount))} ${esc(t.asset)}`,
+      t.priceUsd !== undefined ? num(t.priceUsd) : '—',
+      t.rate ? `${num(t.rate.mid, 4)}<br><span class="small">tab. ${esc(t.rate.table)} z ${t.rate.effectiveDate}</span>` : '—',
+      t.valuePln !== undefined ? `<b>${esc(formatPln(t.valuePln))}</b>` : esc(t.note ?? '—'),
+    ])));
+  }
+
   // ---- 8. request drafts
   const offRamps = s.chain.activity.flatMap((w) => w.offRamps);
   const attested = (s.attestations ?? []).filter(knowsIdentity).filter((x, i, all) => all.findIndex((y) => y.issuer === x.issuer && y.address === x.address) === i);
@@ -389,6 +370,28 @@ export function renderReport(input: ReportInput): string {
     for (const a of attested) out.push(`<pre>${esc(draftAttestationRequest({ ...a, ...s.attestations!.find((y) => y.issuer === a.issuer && y.address === a.address && y.value) }) + reasoning(`attestation:${a.issuer}:${a.address}`))}</pre>`);
   }
 
+  // ---- what the language model wrote (auxiliary)
+  if (s.dossier?.sentences.length) {
+    const d = s.dossier;
+    const cited = new Set(d.sentences.flatMap((x) => x.cites));
+    out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
+    out.push(`<div class="notice">${d.sentences.map((x) => `${esc(x.text)} <span class="small mono">[${x.cites.map(esc).join(', ')}]</span>`).join(' ')}</div>`);
+    out.push(`<p class="small">Opis napisał model ${esc(d.model)} działający na tej maszynie (${minute(d.createdAt)} UTC). Dostał wyłącznie ponumerowane ustalenia tej analizy. Każde zdanie wskazuje ustalenia, na których się opiera, a program sprawdził, że wskazane ustalenia istnieją i że każda liczba i każdy adres w zdaniu z nich pochodzi. ${d.rejected.length ? `Kontrola odrzuciła ${d.rejected.length} ${d.rejected.length === 1 ? 'zdanie' : 'zdań'} modelu; są wymienione niżej.` : 'Kontrola nie odrzuciła żadnego zdania.'}</p>`);
+    out.push(table(['Nr', 'Warstwa', 'Ustalenie', 'Gdzie sprawdzić'], d.findings.filter((f) => cited.has(f.id)).map((f) => [
+      `<span class="mono">${esc(f.id)}</span>`, f.layer === 'fact' ? 'fakt źródłowy' : f.layer === 'computed' ? 'wynik obliczony' : 'wniosek do weryfikacji', esc(f.text), f.source ? `<span class="small">${esc(f.source)}</span>` : '<span class="small">ustalenie tej analizy</span>',
+    ])));
+    if (d.rejected.length) out.push(`<p class="small">Zdania odrzucone przez kontrolę (nie są częścią opisu): ${d.rejected.map((r) => `„${esc(r.text)}” — ${esc(r.reason)}`).join('; ')}.</p>`);
+  } else if (s.narrative) {
+    out.push(h2(++n, 'Opis sprawy sporządzony przez model językowy', 'W'));
+    out.push(`<div class="notice">${esc(s.narrative.text).replace(/\n+/g, '<br>')}</div>`);
+    out.push(`<p class="small">Tekst wygenerował model ${esc(s.narrative.model)} działający na tej maszynie, wyłącznie z ustaleń zawartych w tym raporcie (${minute(s.narrative.createdAt)} UTC). Może zawierać błędy; rozstrzygają ustalenia i źródła, nie ten opis.</p>`);
+  }
+  if (s.triage?.leads.length) {
+    out.push(h2(++n, 'Dalsze czynności', 'W'));
+    out.push(`<p>Lista wynika z ustaleń według stałych reguł. ${s.triage.byModel ? `Kolejność i uzasadnienia zaproponował model ${esc(s.triage.model)}; nie może on dodać czynności spoza listy.` : 'Kolejność wynika z reguł.'}</p>`);
+    out.push(table(['Lp.', 'Czynność', 'Dlaczego teraz'], s.triage.leads.map((l, i) => [String(i + 1), esc(l.text), l.reason ? esc(l.reason) : '<span class="small">—</span>'])));
+  }
+
   // ---- what could not be read
   if (s.gaps?.length) {
     out.push(h2(++n, 'Czego nie udało się odczytać', 'F'));
@@ -398,15 +401,19 @@ export function renderReport(input: ReportInput): string {
 
   // ---- 9. sources and reproducibility
   out.push(h2(++n, 'Źródła i odtwarzalność', 'F'));
-  const p = s.params;
-  out.push(`<p><b>Parametry wyszukiwania.</b> Głębokość podążania za tropami: ${p.maxDepth}. Sprawdzanie, kto jeszcze podał znalezione adresy: ${p.pivotOnAddresses ? 'tak' : 'nie'}. Najwyżej ${p.maxIdentifiers} tropów, ${p.maxChainAddresses} adresów analizowanych w łańcuchu bloków. Sprawdzono ${s.identifiers.length} tropów:</p>`);
-  out.push(`<ul>${s.identifiers.filter((i) => i.kind !== 'crypto_address').map((i) => `<li>${KIND[i.kind] ?? i.kind}: ${esc(i.value)}${i.origin === 'seed' ? ' (wprowadzony)' : ''}</li>`).join('')}</ul>`);
-  out.push(`<p><b>Wykorzystane źródła.</b></p>${table(['Źródło', 'Adres'], input.sources.map((x) => [esc(x.name), x.hosts.map(esc).join(', ')]))}`);
-  out.push(`<p>Połączenia z adresami spoza listy dozwolonych źródeł: ${s.counts.denied === 0 ? 'żadnego' : `${s.counts.denied} zablokowanych`}.</p>`);
   out.push(`<p><b>Zapisane dowody.</b> Każda pobrana strona jest zapisana w niezmienionej postaci razem z czasem pobrania i skrótem SHA-256 jej treści. Skróty są połączone w łańcuch: zmiana dowolnego zapisu zmienia wszystkie następne. ${input.verification.ok ? `Sprawdzono ${input.verification.checked} zapisów — wszystkie zgodne.` : `Niezgodne zapisy: ${input.verification.broken.join(', ')}.`}</p>`);
   out.push(table(['Nr', 'Adres źródła', 'Pobrano (UTC)', 'Skrót SHA-256 treści'], input.snapshots.map((x) => [
     String(x.seq), `<a href="${esc(x.url)}">${esc(x.url)}</a>`, minute(x.fetched_at), `<span class="mono hash">${esc(x.sha256)}</span>`,
   ])));
+
+  // ---- audit trail
+  if (input.audit?.length) {
+    out.push(h2(++n, 'Dziennik czynności w sprawie', 'F'));
+    out.push('<p>Każda czynność w narzędziu jest zapisywana z czasem i wykonawcą. Wpisy są połączone łańcuchem skrótów: zmiana lub usunięcie wpisu unieważnia wszystkie późniejsze.</p>');
+    out.push(table(['Czas (UTC)', 'Kto', 'Czynność', 'Skrót wpisu'], [...input.audit].reverse().map((e) => [
+      minute(e.at), esc(e.actor), `${esc(AUDIT_PL[e.action] ?? e.action)}${e.runId ? `<br><span class="small">analiza <code>${esc(e.runId.slice(0, 8))}</code></span>` : ''}`, `<span class="mono hash">${esc(e.hash.slice(0, 16))}…</span>`,
+    ])));
+  }
 
   // ---- 10. glossary
   out.push(h2(++n, 'Słowniczek'));

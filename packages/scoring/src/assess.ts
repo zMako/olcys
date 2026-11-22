@@ -489,24 +489,22 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
           }
         }
 
-        // M1: a language model compared this unconfirmed account with the person's confirmed ones. Its opinion is an
-        // aid: agreement adds a little and stays under the identity limit; disagreement takes points away after it.
-        const opinion = cluster.identityCap < 100 ? facts.opinions?.find((o) => o.verdict !== 'unclear' && cluster.accounts.some((x) => x.origin === o.origin && x.handle.toLowerCase() === o.handle.toLowerCase())) : undefined;
-        const said = opinion ? `Model językowy (${opinion.model}) porównał konto ${opinion.handle} z kontami osoby. ${opinion.reasons.join(' ')}`.trim() : '';
-        if (opinion?.verdict === 'same') {
-          total += ruleset.opinion.bonus;
-          line({ rule: 'M1', title: 'Ocena modelu: prawdopodobnie ta sama osoba', effect: 'bonus', points: ruleset.opinion.bonus, detail: `${said} Ocena jest pomocnicza i nie podnosi wyniku ponad limit tożsamości.`, evidence: [] });
-        }
-
         // T: the score can never exceed how sure we are that these accounts are the person asked about.
         if (total > cluster.identityCap) {
           total = cluster.identityCap;
           line({ rule: 'T1', title: 'Limit pewności tożsamości', effect: 'cap', points: cluster.identityCap, detail: cluster.identityNote, evidence: [] });
         }
-        if (opinion?.verdict === 'different') {
-          const cut = Math.min(ruleset.opinion.penalty, total);
-          total -= cut;
-          line({ rule: 'M1', title: 'Ocena modelu: prawdopodobnie inna osoba', effect: 'penalty', points: cut, detail: `${said} Ocena jest pomocnicza.`, evidence: [] });
+
+        // M1: a language model compared this unconfirmed account with the person's confirmed ones. Its opinion is
+        // shown for the analyst and is worth no points: the score is computed by rules alone, so that the same
+        // facts always give the same result.
+        const opinion = cluster.identityCap < 100 ? facts.opinions?.find((o) => o.verdict !== 'unclear' && cluster.accounts.some((x) => x.origin === o.origin && x.handle.toLowerCase() === o.handle.toLowerCase())) : undefined;
+        if (opinion) {
+          line({
+            rule: 'M1', title: `Opinia modelu językowego: ${opinion.verdict === 'same' ? 'prawdopodobnie ta sama osoba' : 'prawdopodobnie inna osoba'}`, effect: 'info', points: null,
+            detail: `Model językowy (${opinion.model}) porównał konto ${opinion.handle} z kontami osoby. ${opinion.reasons.join(' ')} Opinia jest wskazówką dla analityka i nie zmienia wyniku: Wskaźnik Pewności liczą wyłącznie reguły.`.replace(/\s+/g, ' '),
+            evidence: [],
+          });
         }
       }
 
@@ -533,7 +531,7 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
     if (webTimes.length || sentAt.size) cluster.rhythm = compareRhythm(webTimes, [...sentAt.values()], offBeat, ruleset);
   }
 
-  // E1: an address the analyst entered is the starting point of the case even when no account published it.
+  // I1: an address the analyst entered is the starting point of the case even when no account published it.
   // The tool then says what the chain and public attestations show about it — and that it cannot name the owner.
   for (const seed of facts.seeds) {
     const parsed = seed.kind === 'crypto_address' ? parseAddress(seed.value) : undefined;
@@ -552,7 +550,7 @@ export function assess(facts: RunFacts, ruleset: Ruleset = DEFAULT_RULESET): Ass
     if (excluded) receipt.push({ rule: excluded.rule, title: excluded.title, effect: 'exclusion', points: null, total: 0, detail: excluded.detail, evidence: info?.sourceUrl ? [info.sourceUrl] : [] });
     else {
       receipt.push({
-        rule: 'E1', title: 'Adres wprowadzony przez analityka', effect: 'base', points: 100, total: 100,
+        rule: 'I1', title: 'Adres wprowadzony przez analityka', effect: 'base', points: 100, total: 100,
         detail: 'Adres jest punktem wyjścia sprawy, a nie jej wynikiem. Wynik 100% znaczy, że adres należy do sprawy; nie mówi, kto jest jego właścicielem — żadne znalezione konto go nie opublikowało.',
         evidence: [],
       });

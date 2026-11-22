@@ -40,7 +40,7 @@ export function caseFindings(s: RunSummary): Finding[] {
     // The basis of a score is what scored; lines that only inform (an attestation, the kind of account) are separate findings.
     const scored = l.receipt.filter((x) => x.effect !== 'info');
     const last = scored[scored.length - 1];
-    const entered = scored[0]?.rule === 'E1';
+    const entered = scored[0]?.rule === 'I1';
     add('computed', entered
       ? `Adres ${short(l.address)} (${CHAIN[l.chain] ?? l.chain}) wprowadził analityk jako punkt wyjścia sprawy. Żadne znalezione konto go nie opublikowało, więc analiza nie wskazuje osoby, do której należy.`
       : `Adres ${short(l.address)} (${CHAIN[l.chain] ?? l.chain}): Wskaźnik Pewności ${l.score}%, ${BAND[l.band] ?? l.band}${l.proven ? ', potwierdzony podpisem sprawdzonym matematycznie' : ''}. Podstawa: ${scored[0]?.title ?? ''}${last && last !== scored[0] ? `; ${last.title}` : ''}.`, l.occurrences[0]?.url);

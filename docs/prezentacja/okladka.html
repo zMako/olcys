@@ -1,0 +1,33 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../../node_modules/@fontsource/brygada-1918/700.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/lato/400.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/lato/900.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/ibm-plex-mono/500.css">
+<style>
+  body { margin: 0; } .c { width: 800px; height: 600px; padding: 44px 48px; background: #0f1b2d; color: #fff; font: 19px/1.4 'Lato', sans-serif; box-sizing: border-box; position: relative; overflow: hidden; }
+  h1 { margin: 0; font: 700 86px/1 'Brygada 1918', serif; } .sub { margin: 6px 0 26px; font: italic 22px 'Brygada 1918', serif; color: #a9b6cb; }
+  .path { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0 0 26px; } .path div { position: relative; padding-right: 14px; }
+  .path div::before { content: ''; position: absolute; top: 19px; left: 0; right: 0; height: 3px; background: #b4abff; }
+  .path div:last-child::before { right: 60%; }
+  .path i { position: relative; display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 9px; border-radius: 50%; background: #b4abff; color: #0f1b2d; font: 500 18px 'IBM Plex Mono'; font-style: normal; }
+  .path b { display: block; font-size: 18px; } .path span { display: block; font-size: 14.5px; color: #a9b6cb; line-height: 1.3; }
+  .receipt { position: absolute; right: 48px; bottom: 44px; width: 300px; padding: 16px 18px 14px; background: #fff; color: #0f1b2d; font: 500 13px/1.5 'IBM Plex Mono', monospace; transform: rotate(-2deg); box-shadow: 0 16px 34px rgba(0,0,0,.4); }
+  .receipt p { display: flex; justify-content: space-between; margin: 0; } .receipt hr { border: 0; border-top: 1px dashed #5c6b82; margin: 8px 0; }
+  .receipt .t { font: 700 34px/1 'Brygada 1918', serif; } .meter { height: 6px; background: #104281; border-radius: 3px; margin: 8px 0 4px; }
+  .num { position: absolute; left: 48px; bottom: 44px; } .num b { display: block; font: 900 58px/1 'Lato'; } .num span { color: #a9b6cb; font-size: 17px; }
+</style></head><body><div class="c">
+  <h1>OŁCyŚ</h1><p class="sub">Osintowy Łapacz Cyfrowych Śladów</p>
+  <div class="path">
+    <div><i>1</i><b>Identyfikator</b><span>nick, nazwisko, e-mail, adres</span></div>
+    <div><i>2</i><b>Ślady w sieci</b><span>konta, ogłoszenia, podpisy</span></div>
+    <div><i>3</i><b>Adres i pewność</b><span>wynik liczony regułami</span></div>
+    <div><i>4</i><b>Dokąd trafiły środki</b><span>giełdy, kwota w złotych</span></div>
+  </div>
+  <div class="num"><b>4 500</b><span>polskich portfeli w rejestrze<br>z danych publicznych</span></div>
+  <div class="receipt">
+    <p><b>Wskaźnik Pewności</b><span>Ethereum</span></p><hr>
+    <p><span>P1 Własny profil</span><span>85</span></p>
+    <p><span>C1 Dowód: podpis</span><span>+15</span></p><hr>
+    <p><span>Razem</span><span class="t">100%</span></p><div class="meter"></div><p><span>Bardzo wysokie</span></p>
+  </div>
+</div></body></html>

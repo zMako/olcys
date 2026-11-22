@@ -4,7 +4,7 @@ import { guessIdentifier, knowsIdentity, makeIdentifier } from '@olcys/core';
 import { beginRun, diffRuns, reassessRun, startScheduler, summarizeRun } from '@olcys/engine';
 import { caseFacts, caseFindings, openLeads, renderReport } from '@olcys/report';
 import { StatementReader, createOllamaClient, judgeSamePerson, justifyRequest, llmAvailable, narrate, rankLeads, readWithLlm, writeDossier } from '@olcys/reader';
-import { registerRanking, registerStats } from '@olcys/corpus';
+import { registerRows, registerStats } from '@olcys/corpus';
 import { DEFAULT_RULESET, type Ruleset } from '@olcys/scoring';
 import { loadRuntime } from './config';
 
@@ -21,6 +21,8 @@ const StartRun = z.object({ maxDepth: z.number().int().min(0).max(6).optional(),
 const Sources = z.object({ sources: Mode });
 
 const rt = await loadRuntime();
+// Analyses cut short by the previous shutdown are marked as such before anything else happens.
+const interrupted = await rt.store.closeInterruptedRuns();
 // The reader of posts: a classifier trained on real posts, running here. Loaded on first use (the model takes a few seconds).
 let readerLoading: Promise<StatementReader | undefined> | undefined;
 const reader = {
@@ -33,7 +35,11 @@ const reader = {
 const llm = createOllamaClient();
 
 /** Engine dependencies for the chosen set of sources. */
-const depsFor = (mode?: 'synthetic' | 'live') => ({ store: rt.store, ...rt.sets[mode ?? rt.defaultMode], reader: process.env.READER === 'off' ? undefined : reader, log: (m: string) => app.log.debug(m) });
+// The scoring rules in force: the built-in ones, or the ones the analysts last saved.
+const savedRules = await rt.store.activeRuleset<Ruleset>();
+let rules: Ruleset = savedRules?.body ?? DEFAULT_RULESET;
+let ruleChanges = savedRules?.changes ?? [];
+const depsFor = (mode?: 'synthetic' | 'live') => ({ store: rt.store, ruleset: rules, ...rt.sets[mode ?? rt.defaultMode], reader: process.env.READER === 'off' ? undefined : reader, log: (m: string) => app.log.debug(m) });
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
 
 app.setErrorHandler((err, _req, reply) => {
@@ -54,7 +60,70 @@ app.get('/api/sources', async () => ({
   ),
 }));
 
-app.get('/api/cases', async () => rt.store.listCases());
+/** The few numbers of a run that a list of cases shows. A finished run does not change, so they are kept once computed. */
+const headlineCache = new Map<string, { attributed: number; rejected: number; uncertain: number; totalPln: number; exchanges: string[]; attesters: string[]; gaps: number }>();
+async function headline(runId: string) {
+  const cached = headlineCache.get(runId);
+  if (cached) return cached;
+  const s = await summarizeRun(rt.store, runId);
+  const firm = new Set((s.assessment?.clusters ?? []).filter((c) => c.level === 'entered' || c.level === 'publisher').map((c) => c.id));
+  const links = s.assessment?.links ?? [];
+  const h = {
+    attributed: links.filter((l) => l.status === 'attributed' && firm.has(l.clusterId)).length,
+    uncertain: links.filter((l) => l.status === 'attributed' && !firm.has(l.clusterId)).length,
+    rejected: links.filter((l) => l.status !== 'attributed').length,
+    totalPln: s.estimate?.totalPln ?? 0,
+    exchanges: [...new Set(s.chain.activity.flatMap((a) => a.offRamps.map((o) => o.exchange)))],
+    attesters: [...new Set((s.attestations ?? []).filter(knowsIdentity).map((a) => a.issuer))],
+    gaps: s.gaps?.length ?? 0,
+  };
+  headlineCache.set(runId, h);
+  return h;
+}
+
+export const CASE_STATUSES = ['new', 'in_analysis', 'request_sent', 'answered', 'closed'] as const;
+
+// Every case with where it stands and what its latest analysis found: the analyst's desk.
+app.get('/api/cases', async () => {
+  const out = [];
+  for (const c of await rt.store.listCases()) {
+    const runs = await rt.store.listRuns(c.id);
+    const notes = await rt.store.changeNotes(c.id);
+    const schedule = await rt.store.schedule(c.id);
+    const last = [...runs].reverse().find((r) => r.status === 'completed');
+    out.push({
+      id: c.id, title: c.title, sources: c.sources, status: c.status, statusAt: c.status_at, createdAt: c.created_at,
+      identifiers: (await rt.store.caseIdentifiers(c.id)).map((i) => ({ kind: i.kind, value: i.value })),
+      runs: runs.length, running: runs.some((r) => r.status === 'running'), latestRunId: runs[runs.length - 1]?.id ?? null,
+      failed: runs.length > 0 && runs[runs.length - 1].status === 'failed',
+      lastRun: last ? { id: last.id, startedAt: last.started_at, changes: notes.get(last.id) ?? null, ...(await headline(last.id)) } : null,
+      schedule: schedule ? { everySeconds: schedule.every_seconds, nextRunAt: schedule.next_run_at } : null,
+    });
+  }
+  return out;
+});
+
+// Removes a case and everything analysed in it, so it can be started afresh. The removal itself stays in the audit log.
+app.delete<{ Params: { id: string } }>('/api/cases/:id', async (req, reply) => {
+  const c = await rt.store.getCase(req.params.id);
+  if (!c) return reply.status(404).send({ error: 'not_found' });
+  if (await rt.store.hasRunningRun(c.id)) return reply.status(409).send({ error: 'already_running' });
+  const runs = await rt.store.listRuns(c.id);
+  for (const r of runs) headlineCache.delete(r.id);
+  await rt.store.deleteCase(c.id);
+  await rt.store.audit({ actor: actorOf(req), action: 'case.deleted', detail: { title: c.title, sources: c.sources, analyses: runs.length } });
+  return { deleted: true };
+});
+
+// The analyst moves a case along: analysed, request sent, answered, closed.
+app.put<{ Params: { id: string } }>('/api/cases/:id/status', async (req, reply) => {
+  const c = await rt.store.getCase(req.params.id);
+  if (!c) return reply.status(404).send({ error: 'not_found' });
+  const { status } = z.object({ status: z.enum(CASE_STATUSES) }).parse(req.body);
+  await rt.store.setCaseStatus(c.id, status);
+  await rt.store.audit({ actor: actorOf(req), action: 'case.status', caseId: c.id, detail: { from: c.status, to: status } });
+  return { status };
+});
 
 app.post('/api/cases', async (req, reply) => {
   const body = CreateCase.parse(req.body);
@@ -117,6 +186,7 @@ app.post('/api/analyze', async (req, reply) => {
   const c = await rt.store.findOrCreateCase(body.title ?? identifiers.map((i) => i.value).join(', '), identifiers, mode);
   if (await rt.store.hasRunningRun(c.id)) return reply.status(409).send({ error: 'already_running', caseId: c.id });
   const run = await beginRun(depsFor(mode), c.id, body.params);
+  if (c.status === 'new') await rt.store.setCaseStatus(c.id, 'in_analysis');
   await rt.store.audit({ actor: actorOf(req), action: 'analysis.started', caseId: c.id, runId: run.runId, detail: { identifiers: identifiers.map((i) => `${i.kind}: ${i.value}`), sources: mode } });
   if (body.wait) return reply.status(201).send(await run.done);
   run.done.catch((err) => app.log.error(err));
@@ -129,14 +199,51 @@ app.get<{ Params: { id: string }; Querystring: { after?: string } }>('/api/runs/
   return { status: run.status, events: await rt.store.events(req.params.id, Number(req.query.after ?? 0) || 0) };
 });
 
-app.get('/api/ruleset', async () => DEFAULT_RULESET);
+app.get('/api/ruleset', async () => rules);
+app.get('/api/rules', async () => ({ ruleset: rules, defaults: DEFAULT_RULESET, changes: ruleChanges }));
+
+/** Reads or sets one number inside the rules by its path, e.g. "placements.sale.base". */
+const numberAt = (root: unknown, path: string, set?: number): number | undefined => {
+  const keys = path.split('.');
+  let at = root as Record<string, unknown>;
+  for (const k of keys.slice(0, -1)) {
+    if (!at || typeof at[k] !== 'object') return undefined;
+    at = at[k] as Record<string, unknown>;
+  }
+  const last = keys[keys.length - 1];
+  if (typeof at?.[last] !== 'number') return undefined;
+  if (set !== undefined) at[last] = set;
+  return at[last] as number;
+};
+
+// The analysts change the numbers of the rules. Only numbers that exist in the built-in rules can be set; the
+// result gets its own version, is used by every analysis started afterwards, and the change is written to the audit log.
+app.put('/api/rules', async (req) => {
+  const { values } = z.object({ values: z.record(z.string(), z.number().finite().min(0).max(1_000_000)) }).parse(req.body);
+  const next = structuredClone(DEFAULT_RULESET) as Ruleset;
+  const changes: { path: string; from: number; to: number }[] = [];
+  for (const [path, to] of Object.entries(values)) {
+    const from = numberAt(DEFAULT_RULESET, path);
+    if (from === undefined || from === to) continue;
+    numberAt(next, path, to);
+    changes.push({ path, from, to });
+  }
+  const saved = ((await rt.store.activeRuleset())?.saved ?? 0) + 1;
+  next.version = changes.length ? `${DEFAULT_RULESET.version}-z${saved}` : DEFAULT_RULESET.version;
+  next.name = changes.length ? `${DEFAULT_RULESET.name} (zmienione przez analityka)` : DEFAULT_RULESET.name;
+  await rt.store.saveRuleset(next.version, next, changes, actorOf(req));
+  await rt.store.audit({ actor: actorOf(req), action: changes.length ? 'rules.changed' : 'rules.reset', detail: { version: next.version, changes } });
+  rules = next;
+  ruleChanges = changes;
+  return { ruleset: rules, defaults: DEFAULT_RULESET, changes };
+});
 
 // Score a stored run again with changed rules; the earlier result stays in the database.
 app.post<{ Params: { id: string } }>('/api/runs/:id/reassess', async (req, reply) => {
   if (!(await rt.store.getRun(req.params.id))) return reply.status(404).send({ error: 'not_found' });
   const ruleset = z.object({ ruleset: z.record(z.string(), z.unknown()).optional() }).parse(req.body ?? {}).ruleset;
   await rt.store.audit({ actor: actorOf(req), action: 'run.rescored', caseId: await caseOfRun(req.params.id), runId: req.params.id, detail: { changedRules: Object.keys(ruleset ?? {}) } });
-  return reassessRun(rt.store, req.params.id, ruleset ? ({ ...DEFAULT_RULESET, ...ruleset } as Ruleset) : DEFAULT_RULESET);
+  return reassessRun(rt.store, req.params.id, ruleset ? ({ ...rules, ...ruleset } as Ruleset) : rules);
 });
 
 app.get<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
@@ -155,18 +262,24 @@ app.get('/api/audit', async () => ({ entries: await rt.store.auditTrail({ limit:
 // The locally built register of Polish wallets: counts, and the wallets that paid into exchanges, largest first.
 // It is read from files kept outside the repository; without them the endpoints say so.
 const corpusDir = process.env.CORPUS_DIR ?? '.corpus';
-let registerCache: { at: number; stats: ReturnType<typeof registerStats>; rows: ReturnType<typeof registerRanking> } | undefined;
+let registerCache: { at: number; stats: ReturnType<typeof registerStats>; rows: ReturnType<typeof registerRows> } | undefined;
 const register = () => {
-  if (!registerCache || Date.now() - registerCache.at > 60_000) registerCache = { at: Date.now(), stats: registerStats(corpusDir), rows: registerRanking(corpusDir, 300) };
+  if (!registerCache || Date.now() - registerCache.at > 60_000) registerCache = { at: Date.now(), stats: registerStats(corpusDir), rows: registerRows(corpusDir) };
   return registerCache;
 };
 app.get('/api/register', async () => {
   const { stats } = register();
   return { available: stats.wallets > 0, stats };
 });
-app.get<{ Querystring: { limit?: string } }>('/api/register/wallets', async (req) => {
-  await rt.store.audit({ actor: actorOf(req), action: 'register.viewed' });
-  return { rows: register().rows.slice(0, Math.min(300, Number(req.query.limit ?? 100) || 100)) };
+// The register page by page, the most telling wallets first.
+app.get<{ Querystring: { page?: string; size?: string; only?: string } }>('/api/register/wallets', async (req) => {
+  const size = Math.min(100, Math.max(5, Number(req.query.size ?? 20) || 20));
+  const only = req.query.only ?? 'all';
+  const rows = register().rows.filter((r) => (only === 'cashout' ? r.deposits > 0 : only === 'account' ? !!r.account : only === 'attested' ? r.attested : only === 'binance' ? r.binance : true));
+  const pages = Math.max(1, Math.ceil(rows.length / size));
+  const page = Math.min(pages, Math.max(1, Number(req.query.page ?? 1) || 1));
+  if (page === 1) await rt.store.audit({ actor: actorOf(req), action: 'register.viewed', detail: { only } });
+  return { rows: rows.slice((page - 1) * size, page * size), total: rows.length, page, pages, size };
 });
 
 // Is a language model being served, and which one?
@@ -259,7 +372,7 @@ app.post<{ Params: { id: string }; Querystring: { part?: string } }>('/api/runs/
         judged++;
       }
     }
-    if (judged) await reassessRun(rt.store, runId, DEFAULT_RULESET);
+    if (judged) await reassessRun(rt.store, runId, rules);
     detail.judged = judged;
   }
 
@@ -279,6 +392,12 @@ app.post<{ Params: { id: string }; Querystring: { part?: string } }>('/api/runs/
 
   await rt.store.audit({ actor: actorOf(req), action: 'case.described', caseId: await caseOfRun(runId), runId, detail });
   return summarizeRun(rt.store, runId);
+});
+
+// Every transfer of the analysed wallets, oldest first: the chronology of where the money went.
+app.get<{ Params: { id: string } }>('/api/runs/:id/transfers', async (req, reply) => {
+  if (!(await rt.store.getRun(req.params.id))) return reply.status(404).send({ error: 'not_found' });
+  return { transfers: await rt.store.transfers(req.params.id) };
 });
 
 app.get<{ Params: { id: string } }>('/api/runs/:id/evidence', async (req, reply) => {

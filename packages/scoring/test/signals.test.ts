@@ -220,7 +220,7 @@ describe('an address entered by the analyst', () => {
     expect(a.clusters).toEqual([expect.objectContaining({ level: 'entered', accounts: [] })]);
     const [link] = a.links;
     expect(link).toMatchObject({ status: 'attributed', score: 100, occurrences: [] });
-    expect(link.receipt.map((r) => r.rule)).toEqual(['E1', 'V1', 'V1']);
+    expect(link.receipt.map((r) => r.rule)).toEqual(['I1', 'V1', 'V1']);
     expect(link.receipt[0].detail).toContain('nie mówi, kto jest jego właścicielem');
     // only the issuer that checked identity documents is someone to ask
     expect(link.wouldConfirm[0]).toContain('Dane klienta z Coinbase');
@@ -231,5 +231,27 @@ describe('an address entered by the analyst', () => {
     const a = assess(facts({ seeds, accounts: [{ chain: 'ethereum', address, kind: 'contract', code: '0x6080604052', labels: [], txCount: 1, balances: [] }] }));
     expect(a.links[0]).toMatchObject({ status: 'excluded', score: 0 });
     expect(a.links[0].receipt[0].rule).toBe('X2');
+  });
+});
+
+describe('a language model’s opinion on an unconfirmed account', () => {
+  it('is shown on the receipt and never changes the score', () => {
+    const address = '0x52908400098527886E0F7030069857D2E4169EE7';
+    const main = profile('forum', 'szklane_domy');
+    const alike = profile('code', 'szklanedomy-krk');
+    const base = {
+      seeds: [makeIdentifier('username', 'szklane_domy')], documents: [main, alike],
+      hits: [hit(main, 'username', 'szklane_domy'), hit(alike, 'username', 'szklanedomy-krk')],
+      mentions: [{ documentId: alike.id, chain: 'ethereum', address, raw: address, segmentKind: 'bio', context: address, method: 'plain', obfuscation: [] }],
+    };
+    const before = assess(facts(base as never));
+    for (const verdict of ['same', 'different'] as const) {
+      const after = assess(facts({ ...base, opinions: [{ origin: 'code', handle: 'szklanedomy-krk', verdict, reasons: ['Miasto: „Kraków” ↔ „Kraków”.'], model: 'test' }] } as never));
+      const [was, is] = [before.links.find((l) => l.address === address)!, after.links.find((l) => l.address === address)!];
+      expect(is.score).toBe(was.score);
+      const line = is.receipt.find((r) => r.rule === 'M1')!;
+      expect(line).toMatchObject({ effect: 'info', points: null });
+      expect(line.detail).toContain('nie zmienia wyniku');
+    }
   });
 });

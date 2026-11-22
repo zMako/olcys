@@ -4,29 +4,31 @@ Narzędzie OSINT dla analityków KAS. Po podaniu jednego identyfikatora (nick, i
 
 > Stan: **etap 5 z 7, pogłębione wyszukiwanie, źródła rzeczywiste, analizy cykliczne, czytanie wpisów**. Narzędzie pracuje w rundach między siecią a łańcuchem bloków. W trybie na żywo korzysta z kont, które same podpisują swoje adresy (Farcaster, Keybase), i sprawdza te podpisy matematycznie. Wpisy osoby czyta lokalny klasyfikator, a wybrane — model językowy Bielik uruchomiony na tej samej maszynie; ten sam model na żądanie opisuje sprawę. Sprawę można analizować ponownie według harmonogramu; każda kolejna analiza mówi, co się zmieniło.
 
-![Graf powiązań z szacunkiem w złotych](docs/screenshots/graf-wynik.png)
+Zakończona analiza otwiera się na podsumowaniu; dalej sprawa jest czytana w kolejności, w jakiej prowadzi się analizę — sześć kroków, od wprowadzonych danych do źródeł i raportu.
 
-| Adres odczytany z kodu QR na zdjęciu | Dowód z podpisanej wiadomości |
+![Podsumowanie sprawy](docs/screenshots/podsumowanie.png)
+
+| Krok 2. Ślady w sieci: przebieg poszukiwań, który można odtworzyć | Krok 3. Adresy i pewność: jedna tabela, obok wyliczenie wyniku |
 |---|---|
-| ![Adres z kodu QR](docs/screenshots/kod-qr.png) | ![Dowód kryptograficzny](docs/screenshots/dowod-podpisem.png) |
+| ![Przebieg poszukiwań](docs/screenshots/krok-2-slady.png) | ![Adresy i Wskaźnik Pewności](docs/screenshots/krok-3-adresy.png) |
 
-| Podmiana adresu na profilu w czasie | Szacunek i jego wyliczenie |
+| Krok 3. Odrzucone przypisanie z powodem | Krok 4. Łańcuch bloków: wolumen, wzorce, giełdy |
 |---|---|
-| ![Profil w czasie](docs/screenshots/profil-w-czasie.png) | ![Szacunek w złotych](docs/screenshots/szacunek.png) |
+| ![Odrzucony adres](docs/screenshots/krok-3-odrzucone.png) | ![Aktywność w łańcuchu bloków](docs/screenshots/krok-4-lancuch.png) |
 
-| Adres, którego osoba nigdzie nie podała: twórca jej kontraktu | Rytm doby i konta o podobnym nicku |
+| Krok 5. Wniosek: wartość do wyjaśnienia i jej wyliczenie | Krok 5. Opis sprawy pisany przez model: każde zdanie wskazuje ustalenia |
 |---|---|
-| ![Twórca kontraktu](docs/screenshots/tworca-kontraktu.png) | ![Rytm doby](docs/screenshots/rytm-doby.png) |
+| ![Wniosek](docs/screenshots/krok-5-wniosek.png) | ![Opracowanie przez model językowy](docs/screenshots/krok-5-model.png) |
 
-| Co się zmieniło od poprzedniej analizy |
-|---|
-| ![Zmiany między analizami](docs/screenshots/zmiany-miedzy-analizami.png) |
-
-| Opis sprawy: każde zdanie modelu wskazuje ustalenia | Dalsze czynności w kolejności zaproponowanej przez model |
+| Krok 1. Wejście: co wprowadzono, parametry wyszukiwania, źródła | Krok 6. Źródła i raport: magazyn dowodów |
 |---|---|
-| ![Opis sprawy](docs/screenshots/opis-sprawy.png) | ![Dalsze czynności](docs/screenshots/dalsze-czynnosci.png) |
+| ![Wejście](docs/screenshots/krok-1-wejscie.png) | ![Źródła i raport](docs/screenshots/krok-6-zrodla.png) |
 
-| Rejestr polskich portfeli zbudowany z danych publicznych (liczby zbiorcze) |
+| Sprawy: stan każdej sprawy i wynik ostatniej analizy | Reguły: cały algorytm Wskaźnika Pewności na jednej stronie |
+|---|---|
+| ![Sprawy](docs/screenshots/sprawy.png) | ![Reguły](docs/screenshots/reguly.png) |
+
+| Rejestr polskich portfeli: pod listą portfeli liczby zbiorcze |
 |---|
 | ![Rejestr](docs/screenshots/rejestr.png) |
 
@@ -47,7 +49,7 @@ Wymagany Node.js 20.19 lub nowszy.
 
 ```bash
 npm install
-npm test                          # 217 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
+npm test                          # 220 testów, w tym scenariusze akceptacyjne na wszystkich osobach syntetycznych
 npm run world                     # terminal 1: środowisko syntetyczne (porty 4101–4106)
 npm run analyze -- szklane_domy   # terminal 2: analiza od jednego nicku, wynik w konsoli
 npm run api                       # terminal 2: API HTTP na porcie 4000
@@ -62,16 +64,23 @@ Inne dane wejściowe: `--name "Cezary Baryka"`, `--email …`, `--phone …`, `-
 
 ## Interfejs
 
-Jeden ekran, jedna historia. Po wpisaniu identyfikatora graf rośnie krok po kroku w czterech kolumnach: co wpisano, konta w sieci, adresy kryptowalut, dokąd trafiły środki. Każdy krok analizy jest zapisywany, więc dowolną wcześniejszą analizę można odtworzyć, zatrzymać i przewinąć (`?run=<identyfikator analizy>`).
+Interfejs ma trzy miejsca pracy i stronę z regułami.
 
-- **Paragon.** Kliknięcie adresu pokazuje Wskaźnik Pewności jak paragon: każda reguła to pozycja z punktami i źródłami, na dole suma.
-- **Odrzucenia.** Adres giełdy, kontraktu lub cudzy adres z cytatu zostaje w grafie przekreślony, z powodem.
-- **Trzy rodzaje stwierdzeń.** Każdy blok jest oznaczony jako fakt źródłowy, wynik obliczeń albo wniosek do weryfikacji.
-- **Analizy tej sprawy.** W panelu wyniku ustawia się powtarzanie analizy, uruchamia ją ponownie i otwiera wcześniejsze wyniki. Analiza, która wykryła zmiany, otwiera się sama i pokazuje ich listę; nowe adresy i konta są w grafie oznaczone słowem „nowy”.
-- **Raport.** Druga zakładka pokazuje gotowy raport z przyciskiem pobrania PDF.
-- **Rejestr.** Trzecia zakładka pokazuje lokalnie zbudowany rejestr polskich portfeli: liczby, giełdy, na które wpłacano, i listę portfeli z wpłatami na giełdy. Dane osobowe są zakryte do chwili kliknięcia „Odkryj dane”. Przycisk „Analizuj” przy wierszu uruchamia pełną analizę tego portfela.
-- **Opracowanie sprawy przez model językowy.** Przycisk „Opracuj sprawę” uruchamia cztery kroki, a wynik każdego pojawia się od razu: opis sprawy ze wskazaniem ustaleń przy każdym zdaniu (kliknięcie numeru pokazuje ustalenie i źródło), uporządkowana lista dalszych czynności, ocena niepotwierdzonych kont, uzasadnienia projektów zapytań.
-- **Dziennik czynności.** Każda czynność analityka i harmonogramu jest zapisana z czasem i wykonawcą; wpisy łączy łańcuch skrótów, a `GET /api/audit` sprawdza, czy żaden nie został zmieniony.
+- **Rejestr** — kogo sprawdzić. Najpierw lista: każdy portfel rejestru (4 500), po 20 na stronie, z przechodzeniem między stronami i do wybranej strony; na górze portfele, które wysłały najwięcej na giełdy, dalej te, o których wiadomo najwięcej. Filtr zawęża listę (z wpłatą na giełdę, ze znanym kontem, poświadczone, z tokenem Binance). Dane osobowe są zakryte do chwili kliknięcia „Odkryj dane”. „Analizuj” przy wierszu zakłada sprawę dla tego portfela. Pod listą są liczby zbiorcze.
+- **Sprawy** — biurko analityka: każda sprawa ze stanem (nowa, w analizie, zapytanie wysłane, odpowiedź otrzymana, zamknięta), liczbą adresów przypisanych i odrzuconych, wartością do wyjaśnienia, podmiotami, które znają właściciela, i informacją, czy ostatnia analiza wykazała zmiany. Zmiana stanu trafia do dziennika czynności.
+- **Sprawa** — jedna sprawa. Zakończona analiza otwiera się na **podsumowaniu**: wartość do wyjaśnienia z podziałem na lata, dokąd trafiły środki, kto może wskazać właściciela, najmocniejsze powiązania, czego brakuje — i dopiero pod tym raport do pobrania, projekty zapytań i pozostałe czynności. Dalej ścieżka ma sześć kroków w kolejności scenariusza, a przy każdym krótki wynik. W czasie analizy ścieżka przesuwa się razem z silnikiem, graf zostaje na ekranie, a obok biegnie dziennik: jedno zdanie na każde zapisane zdarzenie, z czasem i numerem kroku (odrzucenia na czerwono, potwierdzone powiązania na zielono).
+  1. **Wejście** — co wprowadzono, parametry wyszukiwania tej analizy, użyte źródła z listą dozwolonych hostów, wcześniejsze analizy sprawy, harmonogram powtarzania i porównanie z poprzednią analizą.
+  2. **Ślady w sieci** — graf, który rośnie krok po kroku (każdy krok jest zapisany, więc przebieg można zatrzymać, przewinąć i odtworzyć), tabela kont z podstawą przypisania każdego do osoby, zmiany na profilach w czasie, wypowiedzi osoby o własnych kryptowalutach.
+  3. **Adresy i pewność** — jedna tabela wszystkich adresów: Wskaźnik Pewności, kategoria powiązania, sposób wykrycia (jawny tekst, ukryty, kod QR, podpis), liczba źródeł, rodzaj adresu i rozstrzygnięcie. Adresy odrzucone są w tej samej tabeli, z powodem. Wybranie wiersza otwiera obok paragon: każda reguła to pozycja z punktami i źródłami, na dole suma.
+  4. **Łańcuch bloków** — łączny wolumen, wykryte wzorce (wyjście do walut tradycyjnych, usługi P2P, wymiana między kryptowalutami), giełdy, na które trafiły środki, publiczne poświadczenia o adresach, chronologia przepływu środków, adresy tego samego portfela, rytm doby.
+  5. **Wniosek** — wartość do wyjaśnienia z wyliczeniem i metodą, podmioty, które mogą wskazać właściciela, z projektami zapytań, oraz osobny, wyraźnie oznaczony blok opracowania przez model językowy.
+  6. **Źródła i raport** — raport do podglądu i pobrania, magazyn dowodów z każdym zapisem (adres zasobu, czas pobrania, skrót treści), lista tego, czego nie udało się odczytać, dziennik czynności.
+- **Reguły** — cały algorytm Wskaźnika Pewności na jednej stronie, generowany z zestawu reguł, którego używa silnik. Liczby są polami: analityk może zmienić wartości wyjściowe, premie, limity, kary i progi. Zapisana zmiana dostaje własny numer wersji (np. `1.4.0-z1`), trafia do dziennika czynności i obowiązuje dla analiz uruchomionych po niej; wcześniejsze analizy zachowują wynik i wersję, według której były liczone. „Przywróć domyślne” wraca do reguł wbudowanych.
+
+Każdy blok jest oznaczony jako fakt źródłowy, wynik obliczeń albo wniosek do weryfikacji. Widok ma własny adres (`?run=<identyfikator analizy>&step=<krok>`), więc można go zapisać albo przekazać.
+
+**Wynik liczą wyłącznie reguły.** Model językowy czyta wpisy, pisze opis sprawy i projekty uzasadnień, ale nie ma wpływu na Wskaźnik Pewności ani na kwotę: te same źródła dają zawsze ten sam wynik.
+
 - Czcionki są dołączone do aplikacji; interfejs nie pobiera niczego z zewnętrznych serwerów.
 
 ## Co robi analiza
@@ -181,8 +190,8 @@ W scenariuszu testowym osoba nie publikuje między 00:00 a 07:00 i żaden z 19 p
 | V1 | Instytucja publicznie poświadcza coś o właścicielu adresu (giełda: zweryfikowany klient i kraj; usługa tożsamości; organizator wydarzenia) | bez punktów; przy giełdzie i weryfikacji tożsamości wskazuje, kto zna właściciela |
 | K3 | Adres nie został podany, ale utworzył kontrakt, który osoba podaje jako własny | najwyżej 70%; +10 pkt proc., jeśli adres jest też podany wprost |
 | R2 | Przelewy z adresu wychodzą w godzinach, w których osoba nie jest aktywna | −10 pkt proc. |
-| M1 | Ocena modelu językowego dla konta niepotwierdzonego, poparta cytatami z obu kont | +10 pkt proc. (poniżej limitu T1) albo −15 pkt proc. |
-| E1 | Adres wprowadzony przez analityka, którego nie opublikowało żadne konto | 100% jako punkt wyjścia sprawy; narzędzie nie wskazuje osoby |
+| M1 | Opinia modelu językowego o koncie niepotwierdzonym, poparta cytatami z obu kont | bez punktów; wskazówka dla analityka |
+| I1 | Adres wprowadzony przez analityka, którego nie opublikowało żadne konto | 100% jako punkt wyjścia sprawy; narzędzie nie wskazuje osoby |
 | C1 | Podpisana wiadomość wymieniająca konto | 100% |
 | C2 | Podpisana wiadomość bez wskazania konta | +30 pkt proc., najwyżej 95% |
 | T1 | Limit pewności tożsamości: inny zapis nicku, tylko nazwisko, nick z dopiskiem | najwyżej 79%, 59%, 49% lub 39% |
@@ -269,12 +278,12 @@ Rejestr ma 4 500 różnych portfeli; 181 z nich jest w obu głównych warstwach 
 |---|---|
 | Portfele przejrzane w sieci Base (rejestr i 234 portfele stałych bywalców wydarzeń) | 4 734 |
 | Portfele z jakąkolwiek historią w Base | 3 014 |
-| Portfele z wpłatą na giełdę | 819 (27% aktywnych) |
-| …w tym poświadczone przez Coinbase jako polskie | 691 |
+| Portfele z wpłatą na giełdę | 818 (27% aktywnych) |
+| …w tym poświadczone przez Coinbase jako polskie | 690 |
 | …w tym należące do znanego konta publicznego | portfele 178 kont |
-| Wpłaty na giełdy | 5 331; łącznie 1 829 045 w stablecoinach i 520,16 ETH |
+| Wpłaty na giełdy | 5 327; łącznie 1 829 021 w stablecoinach i 520,16 ETH |
 | Giełdy według liczby portfeli | Coinbase 336, Binance 229, Bybit 206, OKX 76, Bitget 53, MEXC 51 |
-| Sposób rozpoznania | 962 pary portfel–adres depozytowy regułą D1, 123 po etykiecie (L1) |
+| Sposób rozpoznania | 962 pary portfel–adres depozytowy regułą D1, 119 po etykiecie (L1) |
 
 Wynik jest w interfejsie w zakładce „Rejestr”: lista portfeli od największych wpłat, z poświadczeniami i giełdami; jedno kliknięcie zamienia wiersz w sprawę. Przykład takiej sprawy (portfel bez znanego konta, 20 sekund): Coinbase poświadcza klienta zweryfikowanego w Polsce z płatnym abonamentem, portfel odebrał token obecności na wydarzeniu w Warszawie, a 12 wpłat (USDC i ETH) trafiło na dwa adresy depozytowe Coinbase — wartość do wyjaśnienia 2 036 895 zł za lata 2024–2025. Narzędzie nie wskazuje osoby; wskazuje, kto ją zna, i przygotowuje projekt zapytania.
 
@@ -320,7 +329,7 @@ Wpisy osoby są nie tylko przeszukiwane pod kątem adresów, ale czytane: czy au
 | Kolejność dalszych czynności | porządek i jedno zdanie uzasadnienia | czynności pochodzą z reguł, model nie może dodać własnej; nieznane i powtórzone numery są pomijane |
 | Ocena niepotwierdzonego konta | ta sama osoba, inna, nie wiadomo — z cytatami z obu kont | każdy cytat musi dosłownie występować w treści konta; przy werdykcie „ta sama” cytaty muszą mieć wspólne słowo, a nick, nazwa wyświetlana i adresy się nie liczą; werdykt bez dowodu staje się „nie wiadomo” |
 
-Zdanie, które nie przeszło kontroli, wraca do modelu raz z podaniem powodu; jeśli znów nie przejdzie, zostaje poza opisem i jest pokazane osobno, z powodem odrzucenia. Ocena konta nigdy nie łączy ani nie rozdziela kont: przesuwa wynik adresów z niepotwierdzonego konta o +10 lub −15 pkt proc. poniżej limitu tożsamości (reguła M1), a przy kontach połączonych wyłącznie takim samym nickiem jest tylko wskazówką. Model nie decyduje, co jest przeszukiwane.
+Zdanie, które nie przeszło kontroli, wraca do modelu raz z podaniem powodu; jeśli znów nie przejdzie, zostaje poza opisem i jest pokazane osobno, z powodem odrzucenia. Opinia o koncie nigdy nie łączy ani nie rozdziela kont i nie zmienia żadnego wyniku: na paragonie adresu jest pozycją informacyjną (M1), a Wskaźnik Pewności liczą wyłącznie reguły. Model nie decyduje też, co jest przeszukiwane.
 
 **Zmierzona jakość klasyfikatora.** Uczony na 1 400 prawdziwych wpisach polskich kont, z których po odsianiu i drugim czytaniu 23 to wypowiedzi o własnych kryptowalutach (1,6%).
 

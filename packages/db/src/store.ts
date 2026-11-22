@@ -6,6 +6,9 @@ export interface CaseRow {
   title: string;
   created_at: string;
   sources: string;
+  /** Where the case stands: new, in_analysis, request_sent, answered, closed. */
+  status: string;
+  status_at: string | null;
 }
 
 export interface AuditEntry {
@@ -194,6 +197,17 @@ export class Store {
     return (await this.db.query<CaseRow>('SELECT * FROM cases WHERE id = $1', [id])).rows[0];
   }
 
+  /** Removes a case with every analysis, finding and stored page of it. The audit log keeps the record that it existed and who removed it. */
+  async deleteCase(id: string): Promise<void> {
+    await this.db.query('DELETE FROM cases WHERE id = $1', [id]);
+    // stored pages are kept once per content; those no analysis refers to any more go too
+    await this.db.query('DELETE FROM blobs b WHERE NOT EXISTS (SELECT 1 FROM snapshots s WHERE s.sha256 = b.sha256)');
+  }
+
+  async setCaseStatus(id: string, status: string): Promise<void> {
+    await this.db.query('UPDATE cases SET status = $2, status_at = $3 WHERE id = $1', [id, status, new Date().toISOString()]);
+  }
+
   async listCases(): Promise<CaseRow[]> {
     return (await this.db.query<CaseRow>('SELECT * FROM cases ORDER BY created_at DESC')).rows;
   }
@@ -212,6 +226,15 @@ export class Store {
       [caseId, engineVersion, json(params), trigger],
     );
     return rows[0];
+  }
+
+  /**
+   * Closes analyses that were still running when the server stopped. Nothing is working on them any more, so
+   * leaving them "running" would keep their cases looking busy for ever. Returns how many were closed.
+   */
+  async closeInterruptedRuns(): Promise<number> {
+    const { rows } = await this.db.query("UPDATE runs SET status = 'failed', error = 'Analiza przerwana: serwer został zatrzymany w jej trakcie.', finished_at = now() WHERE status = 'running' RETURNING id");
+    return rows.length;
   }
 
   async finishRun(runId: string, status: 'completed' | 'failed', stats: unknown, error?: string): Promise<void> {
@@ -409,6 +432,19 @@ export class Store {
         [runId, subject, t.chain, t.txHash, t.at, t.from, t.to, t.asset, t.amount, t.snapshotId ?? null, t.network ?? null],
       );
     }
+  }
+
+  // ------------------------------------------------------------------ scoring rules in force
+
+  async saveRuleset(version: string, body: unknown, changes: unknown, actor: string): Promise<void> {
+    await this.db.query('INSERT INTO rulesets (version, body, changes, actor, created_at) VALUES ($1, $2::jsonb, $3::jsonb, $4, $5)', [version, json(body), json(changes), actor, new Date().toISOString()]);
+  }
+
+  /** The rules saved most recently, with what was changed from the built-in ones; undefined when none were ever saved. */
+  async activeRuleset<T>(): Promise<{ body: T; changes: { path: string; from: number; to: number }[]; saved: number; at: string; actor: string } | undefined> {
+    const { rows } = await this.db.query<Record<string, any>>('SELECT body, changes, created_at, actor, (SELECT count(*) FROM rulesets) AS saved FROM rulesets ORDER BY id DESC LIMIT 1');
+    const r = rows[0];
+    return r && { body: r.body as T, changes: r.changes ?? [], saved: Number(r.saved), at: r.created_at, actor: r.actor };
   }
 
   // ------------------------------------------------------------------ what could not be read

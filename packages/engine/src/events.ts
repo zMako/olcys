@@ -50,6 +50,8 @@ export type RunEvent =
       type: 'diff'; baseRunId: string; changed: boolean; summary: string;
       added: { chain: string; address: string }[]; rescored: { chain: string; address: string }[]; accounts: { origin: string; handle: string }[];
     }
+  /** What the engine is doing during a long stretch that produces no finding yet (reading a busy wallet, pricing transfers). */
+  | { type: 'progress'; phase: number; text: string }
   | { type: 'run.finished'; status: string; error?: string; counts: { documents: number; mentions: number; snapshots: number; denied: number } };
 
 export type StoredRunEvent = RunEvent & { seq: number; at: string };

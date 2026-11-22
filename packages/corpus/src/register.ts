@@ -106,19 +106,22 @@ export interface RegisterRow {
   attested: boolean;
   /** The wallet holds Binance's token for verified customers. */
   binance: boolean;
+  /** Transfers found on Base; undefined when the wallet's history was not read. */
+  transfers?: number;
   exchanges: string[];
   deposits: number;
   stablecoins: number;
   ether: number;
-  firstAt: string;
-  lastAt: string;
+  firstAt?: string;
+  lastAt?: string;
 }
 
 /**
- * Wallets of the register that sent priced assets to an exchange, largest first. The order uses a rough worth
- * (stablecoins at 1, ether at a fixed round figure) only to sort; the columns show the amounts themselves.
+ * Every wallet of the register, the most telling first: wallets that sent priced assets to an exchange by the
+ * size of what they sent, then the rest by how much is known about them (a public account, attestations, activity).
+ * The order uses a rough worth (stablecoins at 1, ether at a fixed round figure) only to sort; the columns show the amounts themselves.
  */
-export function registerRanking(root: string, limit = 100): RegisterRow[] {
+export function registerRows(root: string): RegisterRow[] {
   const attested = new Set(readAttestations(root).map((a) => a.wallet));
   const accountOf = new Map<string, RegisterRow['account']>();
   if (existsSync(`${root}/farcaster/profiles.jsonl`)) {
@@ -128,18 +131,23 @@ export function registerRanking(root: string, limit = 100): RegisterRow[] {
     }
   }
   const binance = new Set(readBabt(root).filter((b) => b.holds).map((b) => b.wallet));
-  const rows: (RegisterRow & { worth: number })[] = [];
-  for (const f of readFlows(root)) {
-    const ramps = cashOuts(f);
-    if (!ramps.length) continue;
-    const all = ramps.flatMap((r) => r.deposits).sort((a, b) => a.at.localeCompare(b.at));
+  const flows = new Map(readFlows(root).map((f) => [f.wallet, f]));
+  const rows: (RegisterRow & { worth: number; known: number })[] = [];
+  for (const wallet of new Set([...attested, ...accountOf.keys()])) {
+    const f = flows.get(wallet);
+    const all = (f ? cashOuts(f) : []).flatMap((r) => r.deposits).sort((a, b) => a.at.localeCompare(b.at));
     const stablecoins = all.filter((d) => STABLE.has(d.asset)).reduce((n, d) => n + d.amount, 0);
     const ether = all.filter((d) => d.asset === 'ETH' || d.asset === 'WETH').reduce((n, d) => n + d.amount, 0);
+    const account = accountOf.get(wallet);
     rows.push({
-      wallet: f.wallet, account: accountOf.get(f.wallet), attested: attested.has(f.wallet), binance: binance.has(f.wallet), exchanges: [...new Set(ramps.map((r) => r.exchange))],
-      deposits: all.length, stablecoins: Math.round(stablecoins * 100) / 100, ether: Math.round(ether * 10000) / 10000, firstAt: all[0].at, lastAt: all[all.length - 1].at,
+      wallet, account, attested: attested.has(wallet), binance: binance.has(wallet), transfers: f?.transfers,
+      exchanges: f ? [...new Set(cashOuts(f).map((r) => r.exchange))] : [], deposits: all.length,
+      stablecoins: Math.round(stablecoins * 100) / 100, ether: Math.round(ether * 10000) / 10000, firstAt: all[0]?.at ?? f?.firstAt, lastAt: all[all.length - 1]?.at ?? f?.lastAt,
       worth: stablecoins + ether * 3000,
+      known: (account ? 4 : 0) + (attested.has(wallet) ? 2 : 0) + (binance.has(wallet) ? 1 : 0),
     });
   }
-  return rows.sort((a, b) => b.worth - a.worth).slice(0, limit).map(({ worth: _worth, ...row }) => row);
+  return rows
+    .sort((a, b) => b.worth - a.worth || b.known - a.known || (b.transfers ?? 0) - (a.transfers ?? 0) || a.wallet.localeCompare(b.wallet))
+    .map(({ worth: _worth, known: _known, ...row }) => row);
 }

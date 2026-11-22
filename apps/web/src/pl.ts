@@ -100,8 +100,8 @@ export function describe(e: StoredRunEvent): string {
     case 'identities':
       return `Ustalono, które konta należą do jednej osoby (${e.clusters.length === 1 ? '1 tożsamość' : `${e.clusters.length} tożsamości`}).`;
     case 'link':
-      if (e.status === 'attributed') return `${shortAddress(e.address)}: Wskaźnik Pewności ${e.score}% — ${BAND[e.band]?.toLowerCase()}.`;
-      return `${shortAddress(e.address)}: odrzucono — ${e.label ?? e.reason.toLowerCase()}.`;
+      if (e.status === 'attributed') return `Adres ${shortAddress(e.address)} przypisany: Wskaźnik Pewności ${e.score}%, ${BAND[e.band]?.toLowerCase()}. Podstawa: ${e.reason.toLowerCase()}${e.proven ? ', potwierdzony podpisem' : ''}.`;
+      return `Adres ${shortAddress(e.address)} odrzucony: ${e.reason.toLowerCase()}${e.label ? ` („${e.label}”)` : ''}.`;
     case 'ranked':
       return 'Adresy uporządkowane według pewności.';
     case 'trail':
@@ -122,6 +122,8 @@ export function describe(e: StoredRunEvent): string {
       return `${e.title}: ${e.summary}`;
     case 'diff':
       return e.summary;
+    case 'progress':
+      return e.text;
     case 'run.finished':
       return e.status === 'completed' ? 'Analiza zakończona.' : `Analiza przerwana: ${e.error ?? 'błąd'}.`;
   }

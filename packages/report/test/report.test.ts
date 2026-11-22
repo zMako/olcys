@@ -48,8 +48,14 @@ describe('OSINT report', () => {
   it('contains every part the brief asks for', () => {
     for (const heading of [
       'Podsumowanie', 'Osoba i jej konta w sieci', 'Adresy powiązane z osobą', 'Odrzucone przypisania', 'Aktywność w łańcuchu bloków',
-      'Zmiany na profilach w czasie', 'Szacunek wartości w złotych', 'Chronologiczny przebieg przepływu środków', 'Projekt zapytania do giełdy', 'Źródła i odtwarzalność', 'Słowniczek',
+      'Zmiany na profilach w czasie', 'Szacunek wartości w złotych', 'Chronologiczny przebieg przepływu środków', 'Projekty zapytań', 'Źródła i odtwarzalność', 'Słowniczek',
     ]) expect(html, heading).toContain(heading);
+    // the report follows the order of the analysis: input, traces, addresses, rejections, blockchain, conclusion, sources
+    const order = ['Wejście i parametry wyszukiwania', 'Osoba i jej konta w sieci', 'Adresy powiązane z osobą', 'Odrzucone przypisania', 'Aktywność w łańcuchu bloków', 'Chronologiczny przebieg przepływu środków', 'Szacunek wartości w złotych', 'Projekty zapytań', 'Źródła i odtwarzalność'];
+    const headings = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g)].map((m) => m[1].replace(/<[^>]+>/g, ''));
+    const at = order.map((h) => headings.findIndex((x) => x.includes(h)));
+    expect(at.every((x) => x >= 0)).toBe(true);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
     // the three kinds of statement are explained and used
     for (const kind of ['fakt źródłowy', 'wynik obliczeń', 'wniosek do weryfikacji']) expect(html.split(kind).length).toBeGreaterThan(3);
   });

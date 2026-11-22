@@ -1,16 +1,18 @@
 import { useState, type ReactNode } from 'react';
-import type { AddressActivity, RunDiff, RunSummary, StoredRunEvent } from '@olcys/engine';
+import type { AddressActivity, RunSummary } from '@olcys/engine';
 import { draftRequest, type Link, type OffRamp, type ProfileHistory, type Rhythm } from '@olcys/scoring';
-import { BAND_COLOR } from './graph/Graph';
-import { addressId, type GNode, type Graph } from './graph/model';
-import { ACCOUNT_KIND, BAND, CATEGORY, CERTAINTY, CHAIN, KIND, LEVEL, OBFUSCATION, PLACEMENT, amounts, day, describe, minute, moreAddresses, pln, shortAddress } from './pl';
+import type { GNode } from './graph/model';
+import { ACCOUNT_KIND, CATEGORY, CERTAINTY, CHAIN, KIND, LEVEL, OBFUSCATION, PLACEMENT, amounts, day, minute, pln, shortAddress } from './pl';
 import { Receipt } from './Receipt';
 
 /** A case and its analyses, as the API reports them. */
 export interface CaseInfo {
   id: string;
+  title?: string;
   /** Which set of sources the case is analysed against. */
   sources?: string;
+  /** Where the case stands: new, in_analysis, request_sent, answered, closed. */
+  status?: string;
   schedule: { everySeconds: number; nextRunAt: string } | null;
   runs: { id: string; status: string; trigger: string; startedAt: string; changes: { changed: boolean; summary: string } | null }[];
   /** Who did what in this case, newest first. */
@@ -21,6 +23,7 @@ export interface CaseActions {
   rerun(): void;
   setSchedule(everySeconds: number | null): void;
   openRun(id: string): void;
+  setStatus(status: string): void;
   /** Ask the language model to read the posts the classifier picked out. */
   readPosts(): void;
   /** Ask the language model to describe the case from the findings. */
@@ -34,26 +37,26 @@ export interface LlmState {
   busy?: 'read' | 'describe';
 }
 
-const STATEMENT_KIND: Record<string, string> = { zbycie: 'zbycie', nabycie: 'nabycie', przychod: 'przychód', stan: 'stan posiadania', oferta: 'oferta', inne: 'bez związku' };
+export const STATEMENT_KIND: Record<string, string> = { zbycie: 'zbycie', nabycie: 'nabycie', przychod: 'przychód', stan: 'stan posiadania', oferta: 'oferta', inne: 'bez związku' };
 
 /** Date and time to the second: analyses of one case can be seconds apart. */
-const second = (at: string) => {
+export const second = (at: string) => {
   const iso = new Date(at).toISOString();
   return `${iso.slice(0, 10)}, ${iso.slice(11, 19)}`;
 };
-const changeNote = (r: CaseInfo['runs'][number]) =>
+export const changeNote = (r: CaseInfo['runs'][number]) =>
   r.status === 'running' ? 'w toku' : r.status === 'failed' ? 'nieudana' : !r.changes ? 'pierwsza analiza' : r.changes.changed ? r.changes.summary.replace(/^Od poprzedniej analizy: /, '').replace(/\.$/, '') : 'bez zmian';
 
-const AUDIT: Record<string, string> = {
+export const AUDIT: Record<string, string> = {
   'analysis.started': 'uruchomiono analizę', 'analysis.repeated': 'powtórzono analizę', 'analysis.scheduled': 'analiza z harmonogramu', 'schedule.set': 'ustawiono harmonogram',
   'schedule.cleared': 'wyłączono harmonogram', 'report.viewed': 'otwarto raport', 'report.exported': 'pobrano raport (PDF)', 'posts.read': 'model językowy przeczytał wpisy',
-  'case.described': 'model językowy opracował sprawę', 'register.viewed': 'otwarto rejestr portfeli', 'run.rescored': 'przeliczono wynik według zmienionych reguł',
+  'case.described': 'model językowy opracował sprawę', 'register.viewed': 'otwarto rejestr portfeli', 'case.status': 'zmieniono stan sprawy', 'case.deleted': 'usunięto sprawę', 'rules.changed': 'zmieniono reguły punktacji', 'rules.reset': 'przywrócono domyślne reguły punktacji', 'run.rescored': 'przeliczono wynik według zmienionych reguł',
 };
 
 const LAYER: Record<string, string> = { fact: 'fakt źródłowy', computed: 'wynik obliczony', conclusion: 'wniosek do weryfikacji' };
 
 /** The model's description: each sentence carries the findings it rests on; choosing one shows them. */
-function Dossier({ dossier }: { dossier: NonNullable<RunSummary['dossier']> }) {
+export function Dossier({ dossier }: { dossier: NonNullable<RunSummary['dossier']> }) {
   const [open, setOpen] = useState<number>();
   const [showRejected, setShowRejected] = useState(false);
   const byId = new Map(dossier.findings.map((f) => [f.id, f]));
@@ -111,7 +114,7 @@ function Dossier({ dossier }: { dossier: NonNullable<RunSummary['dossier']> }) {
   );
 }
 
-const EVERY: [number, string][] = [[30, 'co 30 sekund'], [300, 'co 5 minut'], [3600, 'co godzinę'], [86_400, 'co dobę']];
+export const EVERY: [number, string][] = [[30, 'co 30 sekund'], [300, 'co 5 minut'], [3600, 'co godzinę'], [86_400, 'co dobę']];
 
 export interface Vault {
   ok: boolean;
@@ -119,15 +122,15 @@ export interface Vault {
   broken: number[];
 }
 
-type LayerKind = 'fact' | 'computed' | 'hypothesis';
+export type LayerKind = 'fact' | 'computed' | 'hypothesis';
 
 /** The report must keep three kinds of statement apart; every block of the panel says which one it is. */
-function Layer({ kind }: { kind: LayerKind }) {
+export function Layer({ kind }: { kind: LayerKind }) {
   const text = { fact: 'fakt źródłowy', computed: 'wynik obliczeń', hypothesis: 'wniosek do weryfikacji' }[kind];
   return <span className={`layer layer-${kind}`}>{text}</span>;
 }
 
-function Section({ title, layer, children }: { title: string; layer?: LayerKind; children: ReactNode }) {
+export function Section({ title, layer, children }: { title: string; layer?: LayerKind; children: ReactNode }) {
   return (
     <section className="block">
       <h3>
@@ -153,7 +156,7 @@ function Context({ text, raw }: { text: string; raw: string }) {
 }
 
 /** How a profile's published addresses changed over time; the slider steps through the stored versions. */
-function History({ h }: { h: ProfileHistory }) {
+export function History({ h }: { h: ProfileHistory }) {
   const [i, setI] = useState(h.versions.length - 1);
   const v = h.versions[i];
   const prev = i > 0 ? h.versions[i - 1] : undefined;
@@ -200,7 +203,7 @@ function History({ h }: { h: ProfileHistory }) {
 }
 
 /** Draft request to the exchange that holds the customer's identity. */
-function Draft({ off, summary }: { off: OffRamp; summary: RunSummary }) {
+export function Draft({ off, summary }: { off: OffRamp; summary: RunSummary }) {
   const [copied, setCopied] = useState(false);
   const text = draftRequest(off, { caseTitle: summary.identifiers.filter((i) => i.origin === 'seed').map((i) => i.value).join(', '), runId: summary.runId, generatedAt: new Date().toISOString() });
   return (
@@ -219,12 +222,12 @@ function Draft({ off, summary }: { off: OffRamp; summary: RunSummary }) {
   );
 }
 
-const walletOf = (summary: RunSummary | undefined, address?: string): AddressActivity | undefined =>
+export const walletOf = (summary: RunSummary | undefined, address?: string): AddressActivity | undefined =>
   summary?.chain.activity.find((a) => a.address === address || a.wallet.some((m) => m.address === address));
 
 const WEIGHT: Record<string, string> = { duże: 'poważne', średnie: 'istotne', małe: 'drobne' };
 
-function AddressPanel({ node, summary }: { node: GNode; summary?: RunSummary }) {
+export function AddressPanel({ node, summary }: { node: GNode; summary?: RunSummary }) {
   const link: Link | undefined =
     node.link && summary?.assessment?.links.find((l) => l.address === node.address && l.clusterId === node.link!.clusterId);
   const activity = walletOf(summary, node.address);
@@ -366,7 +369,7 @@ function AddressPanel({ node, summary }: { node: GNode; summary?: RunSummary }) 
   );
 }
 
-function AccountPanel({ node, summary }: { node: GNode; summary?: RunSummary }) {
+export function AccountPanel({ node, summary }: { node: GNode; summary?: RunSummary }) {
   const cluster = summary?.assessment?.clusters.find((c) => c.accounts.some((a) => a.origin === node.origin && a.handle === node.handle));
   const published = summary?.addresses.filter((a) => a.occurrences.some((o) => o.origin === node.origin && o.author_handle === node.handle)) ?? [];
   const history = summary?.assessment?.histories.find((h) => h.origin === node.origin && h.handle === node.handle);
@@ -426,7 +429,7 @@ function AccountPanel({ node, summary }: { node: GNode; summary?: RunSummary }) 
   );
 }
 
-function ServicePanel({ node, summary }: { node: GNode; summary?: RunSummary }) {
+export function ServicePanel({ node, summary }: { node: GNode; summary?: RunSummary }) {
   const mine = new Set(node.addresses ?? [node.address ?? '']);
   const hits = (summary?.chain.activity ?? []).flatMap((a) =>
     a.indicators.filter((i) => i.counterparties.some((c) => mine.has(c.address))).map((i) => ({ from: a.address, indicator: i })),
@@ -476,7 +479,7 @@ function ServicePanel({ node, summary }: { node: GNode; summary?: RunSummary }) 
   );
 }
 
-function EstimatePanel({ summary }: { summary?: RunSummary }) {
+export function EstimatePanel({ summary }: { summary?: RunSummary }) {
   const e = summary?.estimate;
   if (!e) return <p className="quiet">Wczytuję szacunek…</p>;
   return (
@@ -548,7 +551,7 @@ function EstimatePanel({ summary }: { summary?: RunSummary }) {
 }
 
 /** When the person publishes and when transfers leave their addresses, hour by hour. The shaded hours are the ones they are never active in. */
-function RhythmStrip({ rhythm }: { rhythm: Rhythm }) {
+export function RhythmStrip({ rhythm }: { rhythm: Rhythm }) {
   const q = rhythm.quiet;
   const quiet = (h: number) => !!q && (h - q.from + 24) % 24 < q.hours;
   const rows: { label: string; hours: number[]; off?: boolean }[] = [
@@ -581,449 +584,24 @@ function RhythmStrip({ rhythm }: { rhythm: Rhythm }) {
   );
 }
 
-function Overview({ graph, summary, events, cursor, vault, onSelect, diff, caseInfo, actions, llm }: { graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions; llm?: LlmState }) {
-  const rhythm = summary?.assessment?.clusters.find((c) => c.rhythm && (c.level === 'entered' || c.level === 'publisher'))?.rhythm;
-  if (!events.length) {
-    return (
-      <>
-        <h2>Jak to działa</h2>
-        <p>Wpisz jeden identyfikator osoby: nick, imię i nazwisko, e-mail, telefon, adres profilu albo adres kryptowalutowy.</p>
-        <p>Narzędzie przeszuka publiczne źródła, znajdzie powiązane adresy, oceni pewność każdego powiązania i sprawdzi, dokąd trafiły środki.</p>
-        <p className="quiet">Każdy wynik ma źródło, datę pobrania i skrót treści, więc analizę można odtworzyć.</p>
-      </>
-    );
-  }
-  const addresses = graph.nodes.filter((n) => n.type === 'address' && n.link);
-  // Accounts matched by name only may be another person; their addresses are listed apart.
-  const firm = new Set(graph.clusters.filter((c) => c.level === 'entered' || c.level === 'publisher').map((c) => c.id));
-  const scored = addresses.filter((n) => n.link!.status === 'attributed').sort((a, b) => b.link!.score - a.link!.score);
-  const attributed = scored.filter((n) => firm.has(n.link!.clusterId));
-  const uncertain = scored.filter((n) => !firm.has(n.link!.clusterId));
-  const rejected = addresses.filter((n) => n.link!.status !== 'attributed');
-  const estimate = graph.nodes.find((n) => n.type === 'estimate');
-  const exchanges = graph.finished ? [...new Set((summary?.chain.activity ?? []).flatMap((a) => a.offRamps.map((o) => o.exchange)))] : [];
-
+/**
+ * Everything about one thing the analyst chose — an address with its receipt, an account, a service the money
+ * went to, the estimate — shown beside the step they are reading, so the place in the scenario is not lost.
+ */
+export function Detail({ node, summary, onClose }: { node: GNode; summary?: RunSummary; onClose(): void }) {
   return (
-    <>
-      <h2>{graph.finished ? 'Wynik analizy' : 'Analiza trwa'}</h2>
-      {!graph.finished && (
-        <ol className="log" aria-live="polite">
-          {events.slice(0, cursor).filter((e) => e.type !== 'hit').slice(-9).map((e) => (
-            <li key={e.seq}>{describe(e)}</li>
-          ))}
-        </ol>
-      )}
-
-      {graph.finished && diff && (
-        <Section title="Co się zmieniło od poprzedniej analizy" layer="computed">
-          <p className={diff.changed ? 'changes' : 'quiet'}>
-            {diff.summary} Porównano z analizą z {minute(diff.baseAt)} UTC.
-          </p>
-          <ul className="changes-list">
-            {[...diff.links, ...diff.profiles, ...diff.accounts, ...diff.indicators].map((c, i) => (
-              <li key={i}>{c.text}</li>
-            ))}
-            {diff.estimate.map((y) => (
-              <li key={y.year}>
-                Szacunek za {y.year}: {pln(y.before)} → {pln(y.after)}.
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {estimate && (
-        <Section title="Do wyjaśnienia" layer="hypothesis">
-          <button className="estimate-row" onClick={() => onSelect('estimate')}>
-            <div className="years">
-              {estimate.years!.map((y) => (
-                <div key={y.year} style={{ display: 'contents' }}>
-                  <span className="y">{y.year}</span>
-                  <span className="v">{pln(y.totalPln)}</span>
-                </div>
-              ))}
-            </div>
-            <span className="quiet">Wartość skierowana do usług wyjścia do walut tradycyjnych. Pokaż wyliczenie.</span>
-          </button>
-          {exchanges.length > 0 && (
-            <p style={{ marginTop: 10 }}>
-              Tożsamość klienta zna giełda: <strong>{exchanges.join(', ')}</strong>. Projekt zapytania jest w szczegółach giełdy i w raporcie.
-            </p>
-          )}
-        </Section>
-      )}
-
-      {graph.finished && !!summary?.attestations?.length && (
-        <Section title="Co o adresach poświadczają instytucje" layer="fact">
-          {[...new Set(summary.attestations.map((x) => `${x.issuer}|${x.address}`))].map((key) => {
-            const [issuer, address] = key.split('|');
-            const theirs = summary.attestations!.filter((x) => x.issuer === issuer && x.address === address);
-            const country = theirs.find((x) => x.claim === 'verified_country')?.value;
-            const said = [...new Set(theirs.map((x) => x.note).filter(Boolean))];
-            return (
-              <p key={key}>
-                <strong>{issuer}</strong> o adresie <span className="mono">{shortAddress(address)}</span>:{' '}
-                {said.length ? said.join('; ') : `właściciel jest zweryfikowanym klientem tej giełdy${country ? ` (kraj weryfikacji: ${country})` : ''}`}.{' '}
-                <button className="linklike" onClick={() => onSelect(addressId('ethereum', address))}>
-                  Pokaż adres
-                </button>
-              </p>
-            );
-          })}
-          <p className="quiet">Poświadczenie nie wskazuje osoby. Giełda lub usługa, która sprawdziła dokumenty właściciela, może go wskazać na wniosek organu; pozostałe poświadczenia są okolicznościami.</p>
-        </Section>
-      )}
-
-      {graph.finished && summary && caseInfo && actions && (
-        <Section title="Analizy tej sprawy" layer="fact">
-          <div className="case-controls">
-            <label>
-              Powtarzaj{' '}
-              <select value={caseInfo.schedule?.everySeconds ?? 0} onChange={(e) => actions.setSchedule(Number(e.target.value) || null)}>
-                <option value={0}>tylko na żądanie</option>
-                {EVERY.map(([seconds, label]) => (
-                  <option key={seconds} value={seconds}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button onClick={actions.rerun}>Analizuj ponownie teraz</button>
-          </div>
-          {caseInfo.schedule && <p className="quiet">Następna analiza: {second(caseInfo.schedule.nextRunAt)} UTC. Wynik ze zmianami otworzy się tu sam.</p>}
-          <ul className="runs">
-            {[...caseInfo.runs].reverse().slice(0, 6).map((r) => (
-              <li key={r.id} className={r.id === summary.runId ? 'current' : ''}>
-                <span>
-                  {second(r.startedAt)} UTC, {r.trigger === 'schedule' ? 'cykliczna' : 'na żądanie'}
-                  <br />
-                  <span className={r.changes?.changed ? 'run-changed' : 'quiet'}>{changeNote(r)}</span>
-                </span>
-                {r.id === summary.runId ? <span>otwarta</span> : r.status === 'completed' ? <button onClick={() => actions.openRun(r.id)}>otwórz</button> : null}
-              </li>
-            ))}
-          </ul>
-          <p className="quiet">Wynik każdej analizy jest zapisany i można go porównać z dowolną wcześniejszą.</p>
-        </Section>
-      )}
-
-      {graph.finished && !!caseInfo?.audit?.length && (
-        <Section title="Dziennik czynności" layer="fact">
-          <ul className="runs">
-            {caseInfo.audit.slice(0, 8).map((e) => (
-              <li key={e.id}>
-                <span>
-                  {second(e.at)} UTC
-                  <br />
-                  <span className="quiet">{AUDIT[e.action] ?? e.action}</span>
-                </span>
-                <span>{e.actor}</span>
-              </li>
-            ))}
-          </ul>
-          <p className="quiet">Każda czynność jest zapisana z czasem i wykonawcą, a wpisy są połączone łańcuchem skrótów. Pełny dziennik jest w raporcie.</p>
-        </Section>
-      )}
-
-      {graph.nodes.some((n) => n.viaWallet) && (
-        <Section title="Znalezione przez łańcuch bloków" layer="computed">
-          {graph.nodes.filter((n) => n.viaWallet).map((n) => (
-            <p key={n.id}>
-              Konto <strong>{n.title}</strong> ({n.sub}) nie jest w sieci z niczym powiązane. Znaleziono je, ponieważ podaje adres, który łańcuch bloków wiąże z adresem osoby.{' '}
-              <button className="linklike" onClick={() => onSelect(n.id)}>
-                Pokaż konto
-              </button>
-            </p>
-          ))}
-        </Section>
-      )}
-
-      {graph.finished && summary && graph.nodes.some((n) => n.viaSimilar) && (
-        <Section title="Konta o podobnym nicku" layer="computed">
-          {graph.nodes.filter((n) => n.viaSimilar).map((n) => {
-            const cluster = summary.assessment?.clusters.find((c) => c.accounts.some((a) => a.origin === n.origin && a.handle === n.handle));
-            const firm = cluster?.level === 'entered' || cluster?.level === 'publisher';
-            const why = (cluster?.joins ?? []).filter((j) => ['J8', 'J9', 'J10'].includes(j.rule) && j.detail.includes(`${n.handle} (`));
-            return (
-              <div key={n.id}>
-                <p>
-                  Konto <strong>{n.title}</strong> ({n.sub}){' '}
-                  {firm ? 'ma nick, który zawiera wprowadzony nick. Samo niczego o właścicielu nie podaje, ale to konto badanej osoby:' : `nie jest potwierdzone. ${cluster?.identityNote ?? ''}`}{' '}
-                  <button className="linklike" onClick={() => onSelect(n.id)}>
-                    Pokaż konto
-                  </button>
-                </p>
-                {firm && (
-                  <ul className="changes-list">
-                    {why.map((j, i) => (
-                      <li key={i}>{j.detail.charAt(0).toUpperCase() + j.detail.slice(1)}.</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            );
-          })}
-        </Section>
-      )}
-
-      {graph.finished && summary?.reading && (
-        <Section title="Co osoba sama napisała o swoich kryptowalutach" layer="computed">
-          <p>
-            Przeczytano {summary.reading.posts} wpisów i ogłoszeń osoby. {summary.reading.generated > 0 && <>{summary.reading.generated} napisały aplikacje — pominięto. </>}
-            {summary.reading.statements.length
-              ? `W ${summary.reading.statements.length} autor najpewniej mówi o własnych transakcjach lub stanie posiadania.`
-              : 'W żadnym autor nie mówi o własnych transakcjach.'}
-          </p>
-          <ul className="statements">
-            {summary.reading.statements.map((x) => (
-              <li key={x.documentId} className={x.detail && !x.detail.concernsAuthor ? 'dismissed' : ''}>
-                <q>{x.text.replace(/\s+/g, ' ').slice(0, 260)}{x.text.length > 260 ? '…' : ''}</q>
-                <div className="proof">
-                  {x.at ? `${day(x.at)}, ` : ''}trafność {Math.round(x.relevance * 100)}%
-                  {x.url && (
-                    <>
-                      ,{' '}
-                      <a href={x.url} target="_blank" rel="noreferrer">
-                        źródło
-                      </a>
-                    </>
-                  )}
-                </div>
-                {x.detail && (
-                  <div className="note">
-                    Model językowy:{' '}
-                    {x.detail.concernsAuthor
-                      ? `${STATEMENT_KIND[x.detail.kind] ?? x.detail.kind}${x.detail.amount ? ` ${x.detail.amount}` : ''}${x.detail.asset ? ` ${x.detail.asset}` : ''}${x.detail.when ? `, ${x.detail.when}` : ''}. `
-                      : 'to nie jest wypowiedź o własnych transakcjach autora. '}
-                    {x.detail.reason}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-          {actions && llm?.available && summary.reading.statements.some((x) => !x.detail) && (
-            <div className="case-controls">
-              <button onClick={actions.readPosts} disabled={!!llm.busy}>
-                {llm.busy === 'read' ? 'Model czyta wpisy…' : 'Przeczytaj modelem językowym'}
-              </button>
-              <span className="quiet">{llm.model.split('/').pop()}, na tej maszynie</span>
-            </div>
-          )}
-          <p className="quiet">Wypowiedź wskazuje, gdzie szukać. Nie jest dowodem transakcji i nie zmienia Wskaźnika Pewności.</p>
-        </Section>
-      )}
-
-      {graph.finished && !!summary?.gaps?.length && (
-        <Section title="Czego nie udało się odczytać" layer="fact">
-          <p>
-            {summary.gaps.length === 1 ? 'Jedno źródło nie odpowiedziało' : `${summary.gaps.length} źródeł lub zapytań nie dało odpowiedzi`} w czasie tej analizy. Wynik może być niepełny; powtórzenie analizy zwykle uzupełnia braki.
-          </p>
-          <ul className="changes-list">
-            {summary.gaps.slice(0, 6).map((g, i) => (
-              <li key={i}>
-                <strong>{g.source}</strong>: {g.message.length > 160 ? `${g.message.slice(0, 160)}…` : g.message}
-                {g.times > 1 ? ` (${g.times} razy)` : ''}
-              </li>
-            ))}
-          </ul>
-          {summary.gaps.length > 6 && <p className="quiet">Pełna lista jest w raporcie.</p>}
-        </Section>
-      )}
-
-      {graph.finished && summary && actions && (summary.dossier || llm?.available) && (
-        <Section title="Opis sprawy" layer="hypothesis">
-          {summary.dossier ? <Dossier dossier={summary.dossier} /> : <p className="quiet">Model językowy może opracować sprawę: opisać ją, uporządkować dalsze czynności, porównać niepotwierdzone konta i uzasadnić zapytania. Dostaje wyłącznie ustalenia tej analizy, a każde jego zdanie jest sprawdzane.</p>}
-          {llm?.available && (
-            <div className="case-controls">
-              <button onClick={actions.describeCase} disabled={!!llm.busy}>
-                {llm.busy === 'describe' ? 'Model opracowuje sprawę…' : summary.dossier ? 'Opracuj ponownie' : 'Opracuj sprawę'}
-              </button>
-            </div>
-          )}
-        </Section>
-      )}
-
-      {graph.finished && !!summary?.judgements?.length && (
-        <Section title="Konta w ocenie modelu" layer="hypothesis">
-          {summary.judgements.map((j) => (
-            <div key={`${j.origin}|${j.handle}`}>
-              <p>
-                Konto <strong>{j.handle}</strong>
-                {j.source ? ` (${j.source})` : ''}
-                {j.scope === 'same_nick' ? ', połączone z osobą wyłącznie takim samym nickiem' : ', niepotwierdzone'}: {j.verdict === 'same' ? 'prawdopodobnie ta sama osoba' : j.verdict === 'different' ? 'prawdopodobnie inna osoba' : 'nie da się rozstrzygnąć'}.
-              </p>
-              {!!j.reasons.length && (
-                <ul className="changes-list">
-                  {j.reasons.map((r, i) => (
-                    <li key={i}>{r}</li>
-                  ))}
-                </ul>
-              )}
-              {j.rejected > 0 && <p className="quiet">Odrzucono {j.rejected} {j.rejected === 1 ? 'dowód' : 'dowody'} modelu: cytatu nie ma w treści kont.</p>}
-            </div>
-          ))}
-          <p className="quiet">Ocena nie łączy ani nie rozdziela kont. Wynik adresów z konta niepotwierdzonego przesuwa o kilka punktów, poniżej limitu tożsamości (reguła M1 w wyliczeniu wyniku); przy koncie o takim samym nicku jest wyłącznie wskazówką dla analityka.</p>
-        </Section>
-      )}
-
-      {graph.finished && !!summary?.triage?.leads.length && (
-        <Section title="Dalsze czynności" layer="hypothesis">
-          <ol className="leads">
-            {summary.triage.leads.map((l) => (
-              <li key={l.id}>
-                {l.text}
-                {l.reason && <span className="quiet"> {l.reason}</span>}
-              </li>
-            ))}
-          </ol>
-          <p className="quiet">
-            Lista wynika z ustaleń według stałych reguł. {summary.triage.byModel ? 'Kolejność i uzasadnienia zaproponował model; nie może dodać czynności spoza listy.' : 'Kolejność wynika z reguł.'}
-          </p>
-        </Section>
-      )}
-
-      {graph.finished && rhythm && (rhythm.quiet || rhythm.webCount >= 5) && (
-        <Section title="Rytm doby" layer="computed">
-          <RhythmStrip rhythm={rhythm} />
-          <p>{rhythm.note}</p>
-          {rhythm.conflicting.map((c) => (
-            <p key={c.address} className="quiet">
-              Adres <span className="mono">{shortAddress(c.address)}</span>: {c.inQuiet} z {c.transfers} przelewów w godzinach, w których osoba nie jest aktywna. Wynik tego adresu obniżono.{' '}
-              <button className="linklike" onClick={() => onSelect(addressId(c.chain, c.address))}>
-                Pokaż adres
-              </button>
-            </p>
-          ))}
-        </Section>
-      )}
-
-      {graph.matches.length > 0 && (
-        <Section title="Kwoty zgodne z przelewami" layer="computed">
-          <ul className="indicators">
-            {graph.matches.map((m, i) => (
-              <li key={i}>{m.detail}</li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {graph.histories.length > 0 && (
-        <Section title="Zmiany w czasie" layer="fact">
-          {graph.histories.map((h) => (
-            <p key={h.origin + h.handle}>
-              {h.changes[0].detail}{' '}
-              <button className="linklike" onClick={() => onSelect(`acc:${h.origin}:${h.handle.toLowerCase()}`)}>
-                Pokaż wersje profilu {h.handle}
-              </button>
-            </p>
-          ))}
-        </Section>
-      )}
-
-      {attributed.length > 0 && (
-        <Section title={`Adresy powiązane z osobą (${attributed.length})`} layer="computed">
-          <ul className="rows">
-            {attributed.map((n) => (
-              <li key={n.id}>
-                <button onClick={() => onSelect(n.id)}>
-                  <span className="row-score">{n.link!.score}%</span>
-                  <span className="row-main">
-                    <span className="mono">{n.title}</span>
-                    <span className="row-meter">
-                      <span style={{ width: `${n.link!.score}%`, background: BAND_COLOR[n.link!.band] }} />
-                    </span>
-                    <span className="quiet">
-                      {CHAIN[n.chain ?? '']}, {n.proven ? 'potwierdzone podpisem' : BAND[n.link!.band].toLowerCase()}
-                      {n.walletSize ? `, ${moreAddresses(n.walletSize)}` : ''}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {uncertain.length > 0 && (
-        <Section title={`Możliwe, że inna osoba (${uncertain.length})`} layer="computed">
-          <p className="quiet">Konto dopasowane tylko po imieniu i nazwisku. Adres nie wchodzi do szacunku.</p>
-          <ul className="rows">
-            {uncertain.map((n) => (
-              <li key={n.id}>
-                <button onClick={() => onSelect(n.id)}>
-                  <span className="row-score">{n.link!.score}%</span>
-                  <span className="row-main">
-                    <span className="mono">{n.title}</span>
-                    <span className="row-meter">
-                      <span style={{ width: `${n.link!.score}%`, background: BAND_COLOR[n.link!.band] }} />
-                    </span>
-                    <span className="quiet">
-                      {CHAIN[n.chain ?? '']}, {BAND[n.link!.band].toLowerCase()}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {rejected.length > 0 && (
-        <Section title={`Odrzucone przypisania (${rejected.length})`} layer="computed">
-          <ul className="rows rejected">
-            {rejected.map((n) => (
-              <li key={n.id}>
-                <button onClick={() => onSelect(n.id)}>
-                  <span className="row-score">✕</span>
-                  <span className="row-main">
-                    <span className="mono">{n.title}</span>
-                    <span className="quiet">{n.link!.status === 'excluded' ? n.label ?? n.link!.reason : 'cudzy adres, tylko zacytowany'}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {graph.finished && summary && (
-        <Section title="Przebieg i dowody" layer="fact">
-          <p>
-            Pobrano {summary.counts.snapshots} stron i odpowiedzi źródeł, przeanalizowano {summary.counts.documents} dokumentów, sprawdzono {summary.identifiers.length} tropów.{' '}
-            {summary.counts.denied === 0 ? 'Żadne połączenie nie wyszło poza listę dozwolonych źródeł.' : `Zablokowano ${summary.counts.denied} połączeń spoza listy dozwolonych źródeł.`}
-          </p>
-          {vault && (
-            <p className={vault.ok ? 'vault ok' : 'vault broken'}>
-              {vault.ok
-                ? `Magazyn dowodów nienaruszony: zgadza się ${vault.checked} z ${vault.checked} zapisów i cały łańcuch skrótów.`
-                : `Magazyn dowodów naruszony: zapis nr ${vault.broken.join(', ')} nie zgadza się z tym, co pobrano.`}
-            </p>
-          )}
-        </Section>
-      )}
-    </>
-  );
-}
-
-export function Panel(props: { node?: GNode; graph: Graph; summary?: RunSummary; events: StoredRunEvent[]; cursor: number; vault?: Vault; onSelect(id?: string): void; diff?: RunDiff | null; caseInfo?: CaseInfo; actions?: CaseActions; llm?: LlmState }) {
-  const { node } = props;
-  return (
-    <aside className="side" aria-label="Szczegóły">
-      {node && node.type !== 'seed' && (
-        <button className="back" onClick={() => props.onSelect(undefined)}>
-          Wróć do wyniku analizy
-        </button>
-      )}
-      {!node || node.type === 'seed' ? (
-        <Overview {...props} onSelect={props.onSelect} />
-      ) : node.type === 'address' ? (
-        <AddressPanel node={node} summary={props.summary} />
+    <aside className="side drawer" aria-label="Szczegóły">
+      <button className="drawer-close" onClick={onClose}>
+        Zamknij szczegóły
+      </button>
+      {node.type === 'address' ? (
+        <AddressPanel node={node} summary={summary} />
       ) : node.type === 'account' ? (
-        <AccountPanel node={node} summary={props.summary} />
+        <AccountPanel node={node} summary={summary} />
       ) : node.type === 'estimate' ? (
-        <EstimatePanel summary={props.summary} />
+        <EstimatePanel summary={summary} />
       ) : (
-        <ServicePanel node={node} summary={props.summary} />
+        <ServicePanel node={node} summary={summary} />
       )}
     </aside>
   );
